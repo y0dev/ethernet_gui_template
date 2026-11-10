@@ -10,6 +10,33 @@ porting workspace and the embedded compatibility layer, with tests. No
 project C code has been ported and no protocol is defined yet; that work
 starts once the C sources are available.
 
+## Screenshots
+
+Captured from the application running offscreen with three simulated devices
+(`tools/device_simulator.py`) talking to it over loopback.
+
+### Session Workflow
+
+| 1 · Server | 2 · Database |
+|---|---|
+| ![Step 1: server listening](docs/images/workflow-1-server.png) | ![Step 2: database selection](docs/images/workflow-2-database.png) |
+| **3 · Devices** | **4 · Operations** |
+| ![Step 3: connected devices and session](docs/images/workflow-3-devices.png) | ![Step 4: operations menu and results](docs/images/workflow-4-operations.png) |
+| **5 · Report** | **Saved HTML report** |
+| ![Step 5: report preview](docs/images/workflow-5-report.png) | ![Exported session report in a browser](docs/images/session-report.png) |
+
+### Other pages
+
+| Packet Monitor | Network Connections |
+|---|---|
+| ![Packet monitor](docs/images/packet-monitor.png) | ![Network connections](docs/images/network-connections.png) |
+| **C-to-Python Porting** | **Customised profile + saved SQL query** |
+| ![Porting workspace](docs/images/porting-workspace.png) | ![Renamed, orange theme, trimmed pages, Database Explorer saved queries](docs/images/custom-profile-saved-queries.png) |
+
+The last image is the same application started with a different
+`project.json`: renamed, orange accent, only four built-in pages plus the
+example plugin, running `example.operation_pass_rate` from `sql/example.sql`.
+
 ## Make it yours
 
 This is a template. `project.json` sets the name, which pages appear and in
