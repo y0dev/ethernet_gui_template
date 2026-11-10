@@ -107,6 +107,17 @@ def load_migrations(directory: Path = SCHEMA_DIR) -> tuple[Migration, ...]:
 
 MIGRATIONS: tuple[Migration, ...] = load_migrations()
 
+#: Tables created by the template's own migrations (0001-0003) and the
+#: migration bookkeeping table.  The Database Explorer and table editor
+#: pages hide these by default, so a project database shows only its own
+#: tables.  Tables added by your migrations (0004+) are not listed here.
+WORKBENCH_TABLES: frozenset[str] = frozenset({
+    "application_logs", "connections", "device_operations", "devices", "operation_results",
+    "packets", "porting_function_mappings", "porting_module_dependencies", "porting_modules",
+    "porting_notes", "porting_projects", "porting_verification_results", "protocols",
+    "schema_migrations", "session_devices", "sessions", "test_cases", "test_results",
+})
+
 
 def current_version(db: Database) -> int:
     """Read the schema version of a database.

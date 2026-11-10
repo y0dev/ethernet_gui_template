@@ -1,7 +1,10 @@
+"""Database Explorer: browse tables read-only and run saved (named) queries."""
+
 from __future__ import annotations
 
 import csv
 import sqlite3
+from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
@@ -25,9 +28,11 @@ from PySide6.QtWidgets import (
 )
 
 from ...context import AppContext
+from ...core.database import Database
 from ...core.hexutil import format_hex
 from ..styles import theme
 from ..widgets.common import PageHeader, configure_table, section_label, show_error
+from ..widgets.table_editor import TableEditor, open_database_file
 
 
 class SqlRowsModel(QAbstractTableModel):
@@ -118,10 +123,11 @@ class SqlRowsModel(QAbstractTableModel):
 
 
 class DatabaseExplorerPage(QWidget):
-    PAGE_SIZE = 500
-
     def __init__(self, ctx: AppContext, parent: QWidget | None = None) -> None:
-        """Build the paged table browser and the saved queries tab.
+        """Build the table browser and the saved queries tab.
+
+        The browser starts on the workbench database and hides the
+        workbench's own tables, so a project database shows only its tables.
 
         Args:
             ctx: Application context.
@@ -129,128 +135,98 @@ class DatabaseExplorerPage(QWidget):
         """
         super().__init__(parent)
         self.ctx = ctx
-        self._offset = 0
+        self._external: Database | None = None
         layout = QVBoxLayout(self)
         layout.setContentsMargins(18, 14, 18, 14)
-        header = PageHeader("Database Explorer", f"Read-only view of {ctx.db.path}")
-        refresh = QPushButton("Refresh")
-        refresh.clicked.connect(self.reload_tables)
-        backup = QPushButton("Backup now")
-        backup.setObjectName("Primary")
-        backup.clicked.connect(self.backup_database)
-        header.actions.addWidget(refresh)
-        header.actions.addWidget(backup)
+        header = PageHeader("Database Explorer", "Read-only view. Make an editable page with "
+                                                 "python tools/new_page.py <key> \"<Title>\" --table <table>.")
+        for text, slot, name in (("Open file…", self.open_file, ""), ("Workbench database", self.use_workbench_database, ""),
+                                 ("Refresh", self.reload_tables, ""), ("Backup now", self.backup_database, "Primary")):
+            button = QPushButton(text)
+            button.setObjectName(name)
+            button.clicked.connect(lambda _c=False, f=slot: f())
+            header.actions.addWidget(button)
         layout.addWidget(header)
+        self.source_label = QLabel("")
+        self.source_label.setObjectName("Dim")
+        self.source_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        layout.addWidget(self.source_label)
 
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        left = QWidget()
-        lv = QVBoxLayout(left)
-        lv.setContentsMargins(0, 0, 0, 0)
-        lv.addWidget(section_label("Tables"))
-        self.tables = QListWidget()
-        lv.addWidget(self.tables, 1)
-        self.schema = QLabel("")
-        self.schema.setObjectName("Dim")
-        self.schema.setWordWrap(True)
-        self.schema.setFont(theme.monospace_font(8))
-        self.schema.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        lv.addWidget(self.schema)
-        splitter.addWidget(left)
-
-        right = QWidget()
-        rv = QVBoxLayout(right)
-        rv.setContentsMargins(0, 0, 0, 0)
-        self.model = SqlRowsModel(self)
-        self.view = QTableView()
-        self.view.setModel(self.model)
-        configure_table(self.view)
-        self.view.setFont(theme.monospace_font(9))
-        rv.addWidget(self.view, 1)
-        pager = QHBoxLayout()
-        self.prev_button = QPushButton("◀ Previous")
-        self.next_button = QPushButton("Next ▶")
-        self.prev_button.clicked.connect(lambda: self._change_page(-1))
-        self.next_button.clicked.connect(lambda: self._change_page(1))
-        self.page_label = QLabel("")
-        self.page_label.setObjectName("Dim")
-        pager.addWidget(self.prev_button)
-        pager.addWidget(self.next_button)
-        pager.addWidget(self.page_label, 1)
-        rv.addLayout(pager)
-        splitter.addWidget(right)
-        splitter.setSizes([240, 900])
+        self.tables_tab = QWidget()
+        self._tables_layout = QVBoxLayout(self.tables_tab)
+        self._tables_layout.setContentsMargins(0, 6, 0, 0)
+        self.browser: TableEditor | None = None
         tabs = QTabWidget()
-        tabs.addTab(splitter, "Tables")
+        tabs.addTab(self.tables_tab, "Tables")
         self.queries = SavedQueriesPanel(ctx)
         tabs.addTab(self.queries, "Saved queries")
         layout.addWidget(tabs, 1)
 
-        self.tables.currentTextChanged.connect(self._on_table_selected)
-        self.reload_tables()
+        workflow = getattr(ctx, "workflow", None)
+        if workflow is not None:
+            workflow.database_changed.connect(lambda _p: self._external is None and self._show_database(ctx.db))
+        self._show_database(ctx.db)
+
+    @property
+    def current_database(self) -> Database:
+        """Database being browsed: an opened file, or the workbench database."""
+        return self._external or self.ctx.db
+
+    def _show_database(self, db: Database) -> None:
+        """Replace the table browser with one for another database.
+
+        Args:
+            db: Database to browse.
+        """
+        if self.browser is not None:
+            self._tables_layout.removeWidget(self.browser)
+            self.browser.deleteLater()
+        self.browser = TableEditor(db, read_only=True)
+        self._tables_layout.addWidget(self.browser)
+        kind = "opened file (not modified)" if db is self._external else "workbench database"
+        self.source_label.setText(f"Browsing {db.path}  ·  {kind}")
+
+    def open_file(self, path: str | None = None) -> None:
+        """Browse another SQLite file without adding the workbench tables to it.
+
+        Args:
+            path: File to open; asks with a file dialog when None.
+        """
+        if path is None:
+            path, _ = QFileDialog.getOpenFileName(self, "Open database", str(self.ctx.db.path.parent),
+                                                  "SQLite database (*.db *.sqlite *.sqlite3);;All files (*)")
+            if not path:
+                return
+        if Path(path).resolve() == self.ctx.db.path.resolve():
+            self.use_workbench_database()
+            return
+        try:
+            db = open_database_file(path)
+        except (OSError, sqlite3.DatabaseError) as exc:
+            show_error(self, "Open database", exc)
+            return
+        self._close_external()
+        self._external = db
+        self._show_database(db)
+
+    def use_workbench_database(self) -> None:
+        """Go back to browsing the workbench database."""
+        self._close_external()
+        self._show_database(self.ctx.db)
+
+    def _close_external(self) -> None:
+        """Close the opened file, if any."""
+        if self._external is not None:
+            self._external.close()
+            self._external = None
 
     def reload_tables(self) -> None:
-        """Reload the table list with row counts, keeping the selected table."""
-        current = self.tables.currentItem().text() if self.tables.currentItem() else None
-        self.tables.blockSignals(True)
-        self.tables.clear()
-        names = self.ctx.db.table_names()
-        for name in names:
-            count = self.ctx.db.query_one(f'SELECT COUNT(*) AS n FROM "{name}"')["n"]
-            self.tables.addItem(name)
-            self.tables.item(self.tables.count() - 1).setToolTip(f"{count} rows")
-        self.tables.blockSignals(False)
-        if current in names:
-            self.tables.setCurrentRow(names.index(current))
-        elif names:
-            self.tables.setCurrentRow(0)
-        self._load_table_page()
-
-    def _on_table_selected(self, _name: str) -> None:
-        """Show the first page of a newly selected table.
-
-        Args:
-            _name: Selected table name (read from the list instead).
-        """
-        self._offset = 0
-        self._load_table_page()
-
-    def _change_page(self, step: int) -> None:
-        """Move one page forward or backward.
-
-        Args:
-            step: +1 for the next page, -1 for the previous page.
-        """
-        self._offset = max(0, self._offset + step * self.PAGE_SIZE)
-        self._load_table_page()
-
-    def _load_table_page(self) -> None:
-        """Load the current page of the selected table, newest rows first.
-
-        Also updates the pager and shows the table's schema. Only names
-        returned by the database are ever put into SQL.
-        """
-        item = self.tables.currentItem()
-        if item is None:
-            self.model.set_rows([], [])
-            return
-        name = item.text()
-        if name not in self.ctx.db.table_names():  # never interpolate unknown names
-            return
-        total = self.ctx.db.query_one(f'SELECT COUNT(*) AS n FROM "{name}"')["n"]
-        cursor = self.ctx.db.execute(f'SELECT * FROM "{name}" ORDER BY rowid DESC LIMIT ? OFFSET ?',
-                                     (self.PAGE_SIZE, self._offset))
-        headers = [d[0] for d in cursor.description]
-        self.model.set_rows(headers, [tuple(r) for r in cursor.fetchall()])
-        self.view.resizeColumnsToContents()
-        end = min(total, self._offset + self.PAGE_SIZE)
-        self.page_label.setText(f"{name}: rows {self._offset + 1 if total else 0}-{end} of {total} (newest first)")
-        self.prev_button.setEnabled(self._offset > 0)
-        self.next_button.setEnabled(end < total)
-        sql = self.ctx.db.query_one("SELECT sql FROM sqlite_master WHERE name = ?", (name,))
-        self.schema.setText(" ".join((sql["sql"] if sql else "").split()))
+        """Reload the table list and the current page."""
+        if self.browser is not None:
+            self.browser.reload_table_list()
 
     def backup_database(self) -> None:
-        """Back up the database and report where it was written."""
+        """Back up the workbench database and report where it was written."""
         try:
             path = self.ctx.backup_database()
         except Exception as exc:

@@ -216,3 +216,94 @@ def test_window_follows_project_profile(qtbot, tmp_path, monkeypatch):
         ctx.shutdown()
         owner.deleteLater()
         QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+
+
+def _make_project_db(path: Path) -> None:
+    """Create an SQLite file the workbench did not create, with one table.
+
+    Args:
+        path: File to create.
+    """
+    import sqlite3
+
+    with sqlite3.connect(path) as conn:
+        conn.execute("CREATE TABLE readings (id INTEGER PRIMARY KEY, sensor TEXT NOT NULL UNIQUE, "
+                     "value REAL, note TEXT)")
+        conn.execute("INSERT INTO readings (sensor, value) VALUES ('t1', 1.5), ('t2', 2.5)")
+
+
+def test_table_editor_edits_and_saves(qtbot, tmp_path):
+    """Cell edits, new rows and deletions are saved together; bad input and conflicts are reported.
+
+    Args:
+        qtbot: pytest-qt robot fixture.
+        tmp_path: pytest temporary directory.
+    """
+    from app.core.database import Database
+    from app.ui.widgets.table_editor import TableEditor
+
+    _make_project_db(tmp_path / "plant.db")
+    db = Database(tmp_path / "plant.db", wal=False)
+    try:
+        editor = TableEditor(db, "readings")
+        qtbot.addWidget(editor)
+        model = editor.model
+        assert model.rowCount() == 2 and not editor.chooser.isVisible()
+        assert not editor.buttons["save"].isEnabled()
+
+        assert model.setData(model.index(0, 3), "checked")
+        assert not model.setData(model.index(0, 2), "warm")          # REAL column
+        assert "expects a number" in editor.status.text()
+        new_row = model.add_row()
+        assert model.index(new_row, 3).data() == "NULL"
+        assert model.setData(model.index(new_row, 1), "t3")
+        model.toggle_deleted([1])
+        assert editor.buttons["save"].isEnabled() and "1 edited, 1 new, 1 to delete" in editor.status.text()
+        assert editor.save_changes() == 3
+        assert [r.values[1] for r in model.rows] == ["t1", "t3"] and model.rows[0].values[3] == "checked"
+        assert not model.has_changes()
+
+        model.setData(model.index(1, 1), "t1")                       # violates UNIQUE
+        assert editor.save_changes() == 0 and "Not saved" in editor.status.text()
+        assert model.has_changes()                                   # kept for fixing
+        editor.revert_changes()
+        assert not model.has_changes() and model.rows[1].values[1] == "t3"
+
+        viewer = TableEditor(db, "readings", read_only=True)
+        qtbot.addWidget(viewer)
+        assert not viewer.buttons["save"].isVisibleTo(viewer)
+        assert not viewer.model.setData(viewer.model.index(0, 3), "x")
+    finally:
+        db.close()
+
+
+def test_explorer_hides_workbench_tables_and_opens_files(qtbot, window, tmp_path):
+    """The explorer lists only project tables by default and browses other files without changing them.
+
+    Args:
+        qtbot: pytest-qt robot fixture.
+        window: Main window.
+        tmp_path: pytest temporary directory.
+    """
+    import sqlite3
+
+    explorer = page_or_skip(window, "database")
+    window.ctx.db.execute("CREATE TABLE calibration (id INTEGER PRIMARY KEY, value REAL)")
+    explorer.reload_tables()
+    chooser = explorer.browser.chooser
+    assert [chooser.itemText(i) for i in range(chooser.count())] == ["calibration"]
+    explorer.browser.show_workbench.setChecked(True)
+    names = [chooser.itemText(i) for i in range(chooser.count())]
+    assert "sessions" in names and "calibration" in names
+
+    project = tmp_path / "plant.db"
+    _make_project_db(project)
+    explorer.open_file(str(project))
+    chooser = explorer.browser.chooser
+    assert [chooser.itemText(i) for i in range(chooser.count())] == ["readings"]
+    assert explorer.browser.model.rowCount() == 2 and explorer.browser.read_only
+    assert "not modified" in explorer.source_label.text()
+    explorer.use_workbench_database()
+    with sqlite3.connect(project) as conn:                           # the file kept only its own table
+        assert [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")] == ["readings"]
+        assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "delete"

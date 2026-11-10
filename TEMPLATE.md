@@ -66,7 +66,49 @@ python tools/new_page.py calibration "Calibration"
 
 This writes `plugins/calibration.py` (a working page with a table and a
 named-query call) and adds it to `project.json` (`plugins` and `pages`). Edit
-the file and restart. The page receives `ctx`, which holds every service:
+the file and restart.
+
+### Start from a template
+
+Pick a different starting point with `--template` (`-t`):
+
+```bash
+python tools/new_page.py calibration "Calibration" --template query_form
+python tools/new_page.py --list-templates
+```
+
+| Template | Starting point |
+|---|---|
+| `table` (default) | Refresh button and a table filled from a named query |
+| `blank` | Header only, for building your own layout |
+| `query_form` | One input per `:parameter` of a named query, a Run button and a result table. Set `QUERY` at the top of the file. |
+| `live_packets` | Live table of traffic on every connection, with pause and clear. Filter it in `accepts()`. |
+| `device_console` | Send HEX/ASCII to an open connection and log its replies. Change the display in `format_frame()`. |
+| `db_table` | View and edit a database table: search, paging, inline editing, Save/Revert. Used automatically with `--table`, see [View and edit a database table](#view-and-edit-a-database-table). |
+
+**Your own templates.** Put `<name>.py.tmpl` files in `page_templates/` at
+the project root and use them with `--template <name>`. A file named like a
+built-in (for example `table.py.tmpl`) replaces it for your project, and
+`--template path/to/file.py.tmpl` uses any file directly. A template is
+plain Python with three placeholders:
+
+| Placeholder | Becomes |
+|---|---|
+| `$key` | the page key, e.g. `calibration` |
+| `$title` | the navigation title, e.g. `Calibration` |
+| `$cls` | the class name, e.g. `CalibrationPage` |
+
+Write `$$` for a literal `$`. An optional first line
+`# template: <description>` is shown by `--list-templates` and left out of
+the generated file. The easiest start is to copy one of
+`tools/page_templates/*.py.tmpl`. The template must define
+`register(registry)`, which calls `registry.add_page("$key", "$title", $cls)`.
+The tool refuses a template with an unknown placeholder, or one that
+produces invalid Python, before it writes anything.
+
+### What a page can use
+
+The page receives `ctx`, which holds every service:
 
 | `ctx.` | Use |
 |---|---|
@@ -102,7 +144,8 @@ overwrites an existing page.
 | The page key | Rename the file, then change the key in `add_page(...)`, the `"plugins.<key>"` entry and the `"pages"` entry in `project.json`. |
 | Hide it without deleting it | Remove `"plugins.<key>"` from `"plugins"`. Removing it from `"pages"` alone is not enough: plugin pages that are not listed are added at the end automatically. |
 | Remove it | Delete `plugins/<key>.py` and both of its `project.json` entries. |
-| Start again from the latest template | Move your file aside (for example to `<key>_old.py`), run `python tools/new_page.py <key> "<Title>"` again, then copy your code across. Re-running does not duplicate the `project.json` entries. |
+| Start again from a template | Move your file aside (for example to `<key>_old.py`), run `python tools/new_page.py <key> "<Title>" --template <name>` again, then copy your code across. Re-running does not duplicate the `project.json` entries. |
+| Pages you create later | Change or add a template in `page_templates/`. Pages that already exist are not affected. |
 
 Use `--no-enable` to create the file without touching `project.json`, and
 add the two entries yourself when the page is ready.
@@ -137,7 +180,8 @@ SELECT * FROM calibration WHERE device_id = :device_id ORDER BY taken_at DESC;
 * Try them in **Database Explorer → Saved queries**: pick a query, fill the
   parameters, Run. The explorer uses a read-only connection, so it can never
   modify data; it also shows the exact Python call to copy. After editing a
-  `.sql` file, click *Reload .sql files*.
+  `.sql` file, click *Reload .sql files*. Saved queries always run against
+  the application database, even while the Tables tab browses another file.
 * The application's own queries are in `app/core/database/sql/workbench.sql`.
   To change one, define a query with the same name in `sql/`; your version
   wins and the override is logged.
@@ -155,6 +199,60 @@ database is upgraded on start-up, and when opened in the Session Workflow.
 Rules: files are numbered consecutively; never edit a migration that has
 already been applied to a database you care about (add a new one, e.g.
 `ALTER TABLE …` or `DROP TABLE …`); a file with only comments is rejected.
+
+### View and edit a database table
+
+One command makes a page for viewing and editing a table:
+
+```bash
+# a table in the application database (e.g. one added by a migration)
+python tools/new_page.py calibration "Calibration" --table calibration
+
+# a table in your own SQLite file, which is left exactly as it is
+python tools/new_page.py plant "Plant data" --table readings --database data/plant.db
+
+# no --table: the page shows a chooser with every table of the database
+python tools/new_page.py tables "Tables" --template db_table
+```
+
+The page shows the table in a grid:
+
+* **Search and paging.** Search matches text in any column.
+* **Editing.** Double-click a cell to edit it. Empty means NULL (or `''` for
+  a `NOT NULL` text column), numbers are checked against the column type,
+  and BLOBs are typed as hex. **Add row** fills unset columns with their
+  defaults on save, and **Delete row** marks rows (select again to unmark).
+* **Saving.** Changed cells, new rows and deleted rows stay coloured until
+  you **Save**, which writes them all in one transaction. If a constraint
+  fails (for example a `UNIQUE` column), nothing is written and your edits
+  stay so you can fix them. **Revert** discards them.
+
+Set `READ_ONLY = True` at the top of the generated file for a view-only
+page. The grid is `app.ui.widgets.table_editor.TableEditor`, so you can also
+put it in your own page: `TableEditor(ctx.db, "calibration")`.
+
+Rows are found by `rowid`, or by the primary key for `WITHOUT ROWID` tables.
+Table and column names come from the database schema and are never built
+from what users type, and values always go through SQL parameters.
+
+### Your own database vs. the application database
+
+The application database (`database_path` in Settings, or the file chosen
+in the Session Workflow) stores the workbench's sessions, packets, devices
+and logs. When the app opens a file as its application database, it adds
+the workbench's tables to that file. To keep a database of your own clean,
+**don't** make it the application database. Instead:
+
+* **To look at it:** open it with **Database Explorer → Open file…**. Neither
+  tables nor settings are added.
+* **To work with it:** generate a page with `--database path/to/your.db`.
+  Like the explorer, the page opens the file as it is.
+
+The Database Explorer hides the workbench's own tables by default, so a
+database shows only its own tables. Tick **Show workbench tables** to see
+them. The hidden names are listed in `WORKBENCH_TABLES`
+(`app/core/database/migrations.py`). Tables your migrations add are always
+shown.
 
 ## 6. Remove a feature's code entirely
 

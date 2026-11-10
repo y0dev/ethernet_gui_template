@@ -1,5 +1,5 @@
 from .connection import Database
-from .migrations import MIGRATIONS, Migration, current_version, migrate
+from .migrations import MIGRATIONS, WORKBENCH_TABLES, Migration, current_version, migrate
 from .repositories import (
     ConnectionRepository,
     DeviceRepository,
@@ -16,11 +16,13 @@ from .repositories import (
     TestCaseRepository,
     TestResultRepository,
 )
+from .table_data import ColumnInfo, RowChanges, TableData, TableDataError, quote_identifier, user_table_names
 
 __all__ = [
-    "Database", "MIGRATIONS", "Migration", "current_version", "migrate",
+    "Database", "MIGRATIONS", "WORKBENCH_TABLES", "Migration", "current_version", "migrate",
     "ConnectionRepository", "DeviceRepository", "LogRepository", "PacketRepository",
     "PortingModuleRepository", "PortingProjectRepository", "ProtocolRepository",
     "Repository", "SessionRepository", "OperationRepository", "OperationResultRepository",
     "SessionDeviceRepository", "TestCaseRepository", "TestResultRepository",
+    "ColumnInfo", "RowChanges", "TableData", "TableDataError", "quote_identifier", "user_table_names",
 ]

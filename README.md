@@ -42,7 +42,10 @@ example plugin, running `example.operation_pass_rate` from `sql/example.sql`.
 This is a template. `project.json` sets the name, which pages appear and in
 what order, plugins, SQL folders and colours. Named SQL queries live in
 `sql/*.sql` and are called with `ctx.db.run("name", ...)`. Add pages with
-`python tools/new_page.py <key> "<Title>"` and tables with
+`python tools/new_page.py <key> "<Title>" [--template NAME]` (see
+`--list-templates`; add your own in `page_templates/`), pages that view and
+edit a table with `python tools/new_page.py <key> "<Title>" --table <name>
+[--database file.db]`, and tables with
 `python tools/new_migration.py "<what>"`. See **[TEMPLATE.md](TEMPLATE.md)**
 for adding, hiding and removing features.
 

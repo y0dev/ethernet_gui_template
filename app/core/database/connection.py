@@ -24,18 +24,23 @@ log = logging.getLogger(__name__)
 class Database:
     """Thread-safe access to one SQLite database file."""
 
-    def __init__(self, path: str | Path, busy_timeout_ms: int = 5000, sql: SqlLibrary | None = None) -> None:
+    def __init__(
+        self, path: str | Path, busy_timeout_ms: int = 5000, sql: SqlLibrary | None = None, wal: bool = True
+    ) -> None:
         """Prepare access to a database file; connections are opened lazily.
 
         Args:
             path: SQLite file path, or ``":memory:"``. Parent folders are created.
             busy_timeout_ms: How long a connection waits for a lock.
             sql: Named-query library; defaults to the built-in queries.
+            wal: Switch the file to WAL journal mode (stored in the file). Pass
+                False to leave someone else's database file as it is.
         """
         self.path = Path(path)
         #: named queries (see sql_library.py); built-ins unless the app passes more
         self.sql = sql if sql is not None else SqlLibrary.load()
         self._busy_timeout_ms = busy_timeout_ms
+        self._wal = wal
         self._local = threading.local()
         self._connections: list[sqlite3.Connection] = []
         self._lock = threading.Lock()
@@ -48,8 +53,8 @@ class Database:
     def connection(self) -> sqlite3.Connection:
         """Return the calling thread's connection, creating it if needed.
 
-        New connections use autocommit mode, WAL journaling and enforced
-        foreign keys.
+        New connections use autocommit mode and enforced foreign keys, plus
+        WAL journaling unless the database was created with ``wal=False``.
 
         Returns:
             The thread's connection.
@@ -71,8 +76,9 @@ class Database:
             conn.row_factory = sqlite3.Row
             conn.execute(f"PRAGMA busy_timeout = {int(self._busy_timeout_ms)}")
             conn.execute("PRAGMA foreign_keys = ON")
-            conn.execute("PRAGMA journal_mode = WAL")
-            conn.execute("PRAGMA synchronous = NORMAL")
+            if self._wal:
+                conn.execute("PRAGMA journal_mode = WAL")
+                conn.execute("PRAGMA synchronous = NORMAL")
             self._local.conn = conn
             self._local.depth = 0
             self._local.generation = self._generation

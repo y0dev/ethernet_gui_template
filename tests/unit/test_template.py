@@ -310,3 +310,182 @@ def test_new_page_tool_creates_working_plugin(qtbot, tmp_path):
         ctx.shutdown()
         owner.deleteLater()
         QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+
+
+def _load_generated_page(tmp_path: Path, key: str, ctx):
+    """Import a generated plugin and build its page.
+
+    Args:
+        tmp_path: Project root the plugin was generated in.
+        key: Page key.
+        ctx: Application context passed to the page.
+
+    Returns:
+        The page widget.
+    """
+    from app.ui.registry import PageRegistry
+
+    spec = importlib.util.spec_from_file_location(f"gen_{key}", tmp_path / "plugins" / f"{key}.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    registry = PageRegistry(include_builtins=False)
+    module.register(registry)
+    return registry.get(key).resolve()(ctx)
+
+
+def _exercise_page(template: str, page) -> None:
+    """Run one action of each built-in template's page and check its effect.
+
+    Args:
+        template: Template the page was generated from.
+        page: Generated page widget, already shown.
+    """
+    from app.core.models import Direction, Packet
+
+    if template == "table":
+        assert page.status.text() == "0 session(s)"
+    elif template == "query_form":
+        assert list(page.inputs) == ["session_id"]
+        page.inputs["session_id"].setText("1")
+        page.run_query()
+        assert page.status.text() == "0 row(s) from report.traffic"
+    elif template == "live_packets":
+        page.add_packets([Packet(0.0, Direction.RX, "a:1", "b:2", b"\x01hi")])
+        assert page.table.rowCount() == 1 and page.table.item(0, 5).text() == "01 68 69"
+        page.set_paused(True)
+        page.add_packets([Packet(0.0, Direction.TX, "b:2", "a:1", b"x")])
+        assert page.table.rowCount() == 1
+        page.clear_packets()
+        assert page.table.rowCount() == 0
+    elif template == "device_console":
+        assert page.connection.count() == 0
+        page.show_frame(Packet(0.0, Direction.RX, "a:1", "b:2", b"OK"))
+        assert "<< " in page.log.toPlainText() and "|OK|" in page.log.toPlainText()
+    elif template == "blank":
+        assert page.content.count() >= 1
+    elif template == "db_table":
+        assert page.editor is not None and page.editor.chooser.count() == 0     # only workbench tables exist
+        assert "no tables of its own" in page.editor.status.text()
+
+
+@pytest.mark.parametrize("template", ["table", "blank", "query_form", "live_packets", "device_console", "db_table"])
+def test_every_builtin_page_template_works(qtbot, tmp_path, template):
+    """Each built-in template generates a page that loads, opens and does its job.
+
+    Args:
+        qtbot: pytest-qt robot fixture.
+        tmp_path: pytest temporary directory.
+        template: Built-in template name.
+    """
+    from PySide6.QtCore import QCoreApplication, QEvent, QObject
+
+    from app.context import AppContext
+    from app.core.config import AppConfig
+
+    subprocess.run([sys.executable, str(ROOT / "tools" / "new_page.py"), "sample", "Sample \"Page\"",
+                    "--template", template, "--root", str(tmp_path)], check=True, capture_output=True)
+    source = (tmp_path / "plugins" / "sample.py").read_text(encoding="utf-8")
+    assert "class SamplePage(QWidget)" in source and "# template:" not in source and "$" not in source
+    owner = QObject()
+    ctx = AppContext.create(AppConfig(database_path=str(tmp_path / "d.db"), log_dir=str(tmp_path / "l")),
+                            tmp_path / "c.json", owner)
+    try:
+        page = _load_generated_page(tmp_path, "sample", ctx)
+        qtbot.addWidget(page)
+        page.show()
+        _exercise_page(template, page)
+    finally:
+        ctx.shutdown()
+        owner.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+
+
+def test_new_page_custom_templates_and_errors(tmp_path, capsys, monkeypatch):
+    """Project templates are listed and override built-ins, paths work, and broken templates are refused.
+
+    Args:
+        tmp_path: pytest temporary directory.
+        capsys: pytest output capture fixture.
+        monkeypatch: pytest monkeypatch fixture.
+    """
+    monkeypatch.syspath_prepend(str(ROOT / "tools"))
+    import new_page
+
+    templates = tmp_path / "page_templates"
+    templates.mkdir()
+    (templates / "mine.py.tmpl").write_text(
+        "# template: My own page\nclass $cls:\n    KEY = \"$key\"\n    TITLE = \"$title\"\n    PRICE = \"$$5\"\n"
+    )
+    (templates / "blank.py.tmpl").write_text("# template: Project blank\nOVERRIDDEN = \"$key\"\n")
+    (templates / "typo.py.tmpl").write_text("NAME = \"$titel\"\n")
+    (templates / "broken.py.tmpl").write_text("def $cls(:\n")
+    root = ["--root", str(tmp_path), "--no-enable"]
+
+    assert new_page.main(["--list-templates", *root]) == 0
+    listing = capsys.readouterr().out
+    assert "mine             My own page" in listing and "Project blank" in listing
+    assert "query_form" in listing and "(default)" in listing
+
+    assert new_page.main(["log_view", "Log View", "--template", "mine", *root]) == 0
+    generated = (tmp_path / "plugins" / "log_view.py").read_text()
+    assert generated == 'class LogViewPage:\n    KEY = "log_view"\n    TITLE = "Log View"\n    PRICE = "$5"\n'
+    assert new_page.main(["over", "Over", "--template", "blank", *root]) == 0
+    assert "OVERRIDDEN" in (tmp_path / "plugins" / "over.py").read_text()
+    assert new_page.main(["by_path", "By Path", "--template", str(templates / "mine.py.tmpl"), *root]) == 0
+
+    capsys.readouterr()
+    assert new_page.main(["a", "A", "--template", "typo", *root]) == 2
+    assert "bad placeholder" in capsys.readouterr().out
+    assert new_page.main(["b", "B", "--template", "broken", *root]) == 2
+    assert "not valid Python" in capsys.readouterr().out
+    assert new_page.main(["c", "C", "--template", "nope", *root]) == 2
+    assert "unknown template 'nope'" in capsys.readouterr().out
+    assert new_page.main(["log_view", "Again", *root]) == 2          # never overwrites
+    assert not (tmp_path / "plugins" / "a.py").exists()
+    assert new_page.main(root) == 2                                   # key and title required
+
+
+def test_table_option_generates_an_editing_page_for_another_database(qtbot, tmp_path):
+    """``--table`` with ``--database`` builds a page that edits that file's table and leaves the file alone.
+
+    Args:
+        qtbot: pytest-qt robot fixture.
+        tmp_path: pytest temporary directory.
+    """
+    from PySide6.QtCore import QCoreApplication, QEvent, QObject
+
+    from app.context import AppContext
+    from app.core.config import AppConfig
+
+    plant = tmp_path / "data" / "plant.db"
+    plant.parent.mkdir()
+    with sqlite3.connect(plant) as conn:
+        conn.execute("CREATE TABLE readings (id INTEGER PRIMARY KEY, value REAL)")
+        conn.execute("INSERT INTO readings (value) VALUES (1.0)")
+    out = subprocess.run([sys.executable, str(ROOT / "tools" / "new_page.py"), "plant", "Plant", "--table",
+                          "readings", "--database", "data/plant.db", "--root", str(tmp_path), "--no-enable"],
+                         check=True, capture_output=True, text=True)
+    assert "template 'db_table'" in out.stdout
+    source = (tmp_path / "plugins" / "plant.py").read_text(encoding="utf-8")
+    assert 'TABLE = "readings"' in source and 'DATABASE = "data/plant.db"' in source
+
+    owner = QObject()
+    config = AppConfig(database_path=str(tmp_path / "d.db"), log_dir=str(tmp_path / "l"))
+    ctx = AppContext.create(config, tmp_path / "c.json", owner)
+    ctx.config.resolve = lambda value: tmp_path / value          # resolve paths against this test project
+    try:
+        page = _load_generated_page(tmp_path, "plant", ctx)
+        qtbot.addWidget(page)
+        page.show()
+        model = page.editor.model
+        assert model.rowCount() == 1
+        assert model.setData(model.index(0, 1), "2.5")
+        assert page.editor.save_changes() == 1
+        page.editor.db.close()
+    finally:
+        ctx.shutdown()
+        owner.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    with sqlite3.connect(plant) as conn:
+        assert conn.execute("SELECT value FROM readings").fetchone()[0] == 2.5
+        assert [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")] == ["readings"]

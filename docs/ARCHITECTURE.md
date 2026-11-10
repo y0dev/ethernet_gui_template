@@ -256,7 +256,15 @@ Schema migration 3 adds `sessions.config_json`, `device_operations`,
 * **Named SQL** (`app/core/database/sql_library.py`): `-- name:` blocks in
   `.sql` files, built-ins first, then `sql_dirs`; same name overrides (logged).
   `Database.run/run_one/run_scalar/run_write`; `run_read_only` uses a
-  `mode=ro` connection for the Database Explorer.
+  `mode=ro` connection for the Database Explorer's saved queries.
+* **Table access** (`app/core/database/table_data.py`): `TableData` reads and
+  edits any table of any SQLite file. It identifies rows by `rowid` or the
+  primary key, takes names only from the schema, and writes a batch of edits
+  in one transaction. `app/ui/widgets/table_editor.py` (`TableEditor`) puts
+  it in a grid, which the Database Explorer (read-only) and `db_table` pages
+  use. `WORKBENCH_TABLES` lists the application's own tables so they can be
+  hidden. `Database(path, wal=False)` opens a file without changing its
+  journal mode.
 * **Migrations** (`app/core/database/schema/NNNN_*.sql`): split with
   `sqlite3.complete_statement`, applied in one transaction per file. The
   conversion from the earlier Python-defined migrations produced the
