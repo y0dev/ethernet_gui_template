@@ -1,0 +1,20 @@
+{
+  "database_path": "data/workbench.db",
+  "backup_dir": "data/backups",
+  "log_dir": "data/logs",
+  "log_level": "INFO",
+  "log_to_database": true,
+  "max_database_log_rows": 50000,
+  "max_live_packets": 100000,
+  "capture_flush_interval_ms": 250,
+  "monitor_refresh_interval_ms": 100,
+  "default_timeout_ms": 5000,
+  "default_reconnect_interval_ms": 3000,
+  "reports_dir": "data/reports",
+  "workflow_server_host": "0.0.0.0",
+  "workflow_server_port": 5000,
+  "workflow_server_transport": "tcp_server",
+  "workflow_server_framing": {
+    "type": "raw"
+  }
+}

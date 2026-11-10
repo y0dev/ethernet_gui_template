@@ -1,0 +1,32 @@
+[project]
+name = "embedded-workbench"
+version = "0.1.0"
+description = "Embedded Systems Workbench: TCP/UDP tooling, packet inspection and C-to-Python porting"
+requires-python = ">=3.10"
+dependencies = ["PySide6>=6.6"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-qt>=4.4", "ruff", "mypy"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "c_reference: compares Python against code compiled by the host C compiler",
+]
+qt_api = "pyside6"
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
+
+[tool.ruff.lint.per-file-ignores]
+# QModelIndex() as a default argument is the standard Qt model signature
+"app/ui/**" = ["B008"]

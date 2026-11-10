@@ -1,0 +1,85 @@
+{
+  "description": "DEMO ONLY: matches tools/device_simulator.py, not a real device protocol. Start the server with framing 'Delimiter' 0a: payloads are sent with the delimiter appended and replies are compared without it.",
+  "operations": [
+    {
+      "name": "Ping",
+      "category": "Connectivity",
+      "description": "Liveness check",
+      "payload_format": "ascii",
+      "payload": "PING",
+      "match": "exact",
+      "expected": "PONG",
+      "timeout_ms": 2000
+    },
+    {
+      "name": "Read ID",
+      "category": "Identification",
+      "description": "Ask the device for its id",
+      "payload_format": "ascii",
+      "payload": "ID?",
+      "match": "prefix",
+      "expected": "ID ",
+      "timeout_ms": 2000
+    },
+    {
+      "name": "Read version",
+      "category": "Identification",
+      "description": "Firmware version string",
+      "payload_format": "ascii",
+      "payload": "VERSION?",
+      "match": "prefix",
+      "expected": "VERSION ",
+      "timeout_ms": 2000
+    },
+    {
+      "name": "Read status",
+      "category": "Diagnostics",
+      "description": "Status, temperature and uptime",
+      "payload_format": "ascii",
+      "payload": "STATUS?",
+      "match": "prefix",
+      "expected": "STATUS OK",
+      "timeout_ms": 2000
+    },
+    {
+      "name": "LED on",
+      "category": "Control",
+      "description": "Switch the LED on",
+      "payload_format": "ascii",
+      "payload": "LED ON",
+      "match": "exact",
+      "expected": "OK LED ON",
+      "timeout_ms": 2000
+    },
+    {
+      "name": "LED off",
+      "category": "Control",
+      "description": "Switch the LED off",
+      "payload_format": "ascii",
+      "payload": "LED OFF",
+      "match": "exact",
+      "expected": "OK LED OFF",
+      "timeout_ms": 2000
+    },
+    {
+      "name": "Reset",
+      "category": "Control",
+      "description": "Soft reset",
+      "payload_format": "ascii",
+      "payload": "RESET",
+      "match": "exact",
+      "expected": "OK RESET",
+      "timeout_ms": 3000
+    },
+    {
+      "name": "Unknown command (expect error)",
+      "category": "Diagnostics",
+      "description": "Negative test: device should reject it",
+      "payload_format": "ascii",
+      "payload": "BOGUS",
+      "match": "prefix",
+      "expected": "ERR",
+      "timeout_ms": 2000
+    }
+  ]
+}

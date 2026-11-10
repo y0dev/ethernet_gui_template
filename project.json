@@ -1,0 +1,31 @@
+{
+  "_readme": "Template profile. See TEMPLATE.md. Keys starting with _ are comments.",
+  "app_name": "Embedded Systems Workbench",
+  "app_subtitle": "comms · capture · porting",
+  "organization": "EmbeddedWorkbench",
+
+  "_pages": "Navigation order. Remove a key to hide that page. Built-ins: workflow, dashboard, devices, connections, packet_monitor, test_bench, porting, database, logs, settings. Plugin pages not listed here are appended at the end.",
+  "pages": [
+    "workflow",
+    "dashboard",
+    "devices",
+    "connections",
+    "packet_monitor",
+    "test_bench",
+    "porting",
+    "database",
+    "logs",
+    "settings",
+    "example_queries"
+  ],
+  "start_page": "workflow",
+
+  "_plugins": "Python modules with a register(registry) function (create one with tools/new_page.py).",
+  "plugins": ["plugins.example_queries"],
+
+  "_sql_dirs": "Folders whose *.sql files define named queries (loaded after the built-ins; same name overrides).",
+  "sql_dirs": ["sql"],
+
+  "_theme": "Colour overrides: background, panel, input, border, text, text_dim, accent, accent_dim, ok, warning, error, rx, tx",
+  "theme": {}
+}
