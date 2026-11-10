@@ -20,6 +20,14 @@ class TcpServer(Endpoint):
         framer_factory: Callable[[], Framer] | None = None,
         parent: QObject | None = None,
     ) -> None:
+        """Create a stopped server; call :meth:`open` to listen.
+
+        Args:
+            port: TCP port to listen on; 0 picks a free port.
+            bind_address: Local IP address to bind, or ``""`` for all interfaces.
+            framer_factory: Creates one framer per client; defaults to raw.
+            parent: Optional Qt parent.
+        """
         super().__init__(parent)
         self.port = port
         self.bind_address = bind_address
@@ -33,6 +41,11 @@ class TcpServer(Endpoint):
 
     # -- interface --------------------------------------------------------
     def open(self) -> None:
+        """Start listening. Does nothing if already listening.
+
+        A failure is reported through ``error_occurred`` and sets the state to
+        ``ERROR``.
+        """
         if self._server.isListening():
             return
         address = (
@@ -47,14 +60,23 @@ class TcpServer(Endpoint):
             self._set_state(ConnectionState.ERROR)
 
     def close(self) -> None:
+        """Stop listening and abort every client connection."""
         self._server.close()
         for peer, (socket, _framer) in list(self._clients.items()):
             socket.abort()
-            self._drop(peer)
+            self._remove_client(peer)
         self._set_state(ConnectionState.DISCONNECTED)
 
     def send(self, payload: bytes, peer: str | None = None) -> bool:
-        """Send to ``peer``, or to every connected client when ``peer`` is None."""
+        """Frame a payload and send it to one client or to every client.
+
+        Args:
+            payload: Application bytes.
+            peer: Client to send to, or None for every connected client.
+
+        Returns:
+            True only if every target was written successfully.
+        """
         targets = [peer] if peer else list(self._clients)
         if not targets:
             self._report_error("send failed: no clients connected")
@@ -77,16 +99,28 @@ class TcpServer(Endpoint):
                 self._report_error(f"send to {target} failed: {socket.errorString()}")
                 ok = False
                 continue
-            self._count_tx(frame, target)
+            self._emit_sent_frame(frame, target)
         return ok
 
     def local_address(self) -> str:
+        """Return the address the server is listening on.
+
+        Returns:
+            ``host:port``, or ``""`` when not listening.
+        """
         if self._server.isListening():
             return format_peer(self._server.serverAddress(), self._server.serverPort())
         return ""
 
     def disconnect_peer(self, peer: str) -> bool:
-        """Close one client connection; ``False`` if it is not connected."""
+        """Ask one client connection to close gracefully.
+
+        Args:
+            peer: Client as ``host:port``.
+
+        Returns:
+            False if that client is not connected.
+        """
         entry = self._clients.get(peer)
         if entry is None:
             return False
@@ -94,13 +128,24 @@ class TcpServer(Endpoint):
         return True
 
     def listening_port(self) -> int:
+        """Return the port the server is listening on.
+
+        Returns:
+            The bound port, or 0 when not listening.
+        """
         return self._server.serverPort() if self._server.isListening() else 0
 
     def peers(self) -> list[str]:
+        """List the connected clients.
+
+        Returns:
+            Client peer strings in connection order.
+        """
         return list(self._clients)
 
     # -- internals --------------------------------------------------------
     def _on_new_connection(self) -> None:
+        """Accept every pending client, giving each its own framer."""
         while self._server.hasPendingConnections():
             socket = self._server.nextPendingConnection()
             peer = format_peer(socket.peerAddress(), socket.peerPort())
@@ -111,6 +156,11 @@ class TcpServer(Endpoint):
             self.peer_changed.emit(peer, True)
 
     def _on_ready_read(self, peer: str) -> None:
+        """Read a client's available bytes, split them into frames and emit each one.
+
+        Args:
+            peer: Client whose socket has data.
+        """
         entry = self._clients.get(peer)
         if entry is None:
             return
@@ -125,10 +175,16 @@ class TcpServer(Endpoint):
             self._report_error(f"framing error from {peer}: {exc}")
             frames = []
         for frame in frames:
-            self._count_rx(frame, peer)
+            self._emit_received_frame(frame, peer)
         self.counters_changed.emit()
 
     def _on_client_error(self, peer: str, error: QAbstractSocket.SocketError) -> None:
+        """Report a client socket error, ignoring a normal remote close.
+
+        Args:
+            peer: Client whose socket failed.
+            error: Qt socket error code.
+        """
         if error == QAbstractSocket.SocketError.RemoteHostClosedError:
             return  # normal disconnect, handled by disconnected()
         entry = self._clients.get(peer)
@@ -136,9 +192,19 @@ class TcpServer(Endpoint):
             self._report_error(f"{peer}: {entry[0].errorString()}")
 
     def _on_client_disconnected(self, peer: str) -> None:
-        self._drop(peer)
+        """Forget a client after its socket disconnects.
 
-    def _drop(self, peer: str) -> None:
+        Args:
+            peer: Client that disconnected.
+        """
+        self._remove_client(peer)
+
+    def _remove_client(self, peer: str) -> None:
+        """Remove a client, schedule its socket for deletion and emit ``peer_changed``.
+
+        Args:
+            peer: Client to remove; unknown peers are ignored.
+        """
         entry = self._clients.pop(peer, None)
         if entry is None:
             return

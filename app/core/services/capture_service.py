@@ -39,6 +39,16 @@ class CaptureService(QObject):
         refresh_interval_ms: int = 100,
         parent: QObject | None = None,
     ) -> None:
+        """Create the service and start the UI batching timer.
+
+        Args:
+            db: Shared database for sessions and packets.
+            connections: Source of live packets.
+            max_live_packets: Size of the in-memory live buffer.
+            flush_interval_ms: Interval between database writes while recording.
+            refresh_interval_ms: Interval between ``packets_added`` batches.
+            parent: Optional Qt parent.
+        """
         super().__init__(parent)
         self.sessions = SessionRepository(db)
         self.packets = PacketRepository(db)
@@ -51,7 +61,7 @@ class CaptureService(QObject):
 
         self._ui_timer = QTimer(self)
         self._ui_timer.setInterval(refresh_interval_ms)
-        self._ui_timer.timeout.connect(self._flush_ui)
+        self._ui_timer.timeout.connect(self._emit_pending_ui_batch)
         self._ui_timer.start()
 
         self._db_timer = QTimer(self)
@@ -62,6 +72,13 @@ class CaptureService(QObject):
 
     # -- intake -----------------------------------------------------------
     def add_packet(self, packet: Packet) -> None:
+        """Accept one live packet, queueing it for recording and for the UI.
+
+        Packets are still recorded while the view is paused.
+
+        Args:
+            packet: Packet from the connection manager.
+        """
         if self._session_id is not None:
             packet.session_id = self._session_id
             self._db_pending.append(packet)
@@ -69,12 +86,14 @@ class CaptureService(QObject):
             self.live.append(packet)
             self._ui_pending.append(packet)
 
-    def _flush_ui(self) -> None:
+    def _emit_pending_ui_batch(self) -> None:
+        """Emit the packets collected since the last UI refresh as one batch."""
         if self._ui_pending:
             batch, self._ui_pending = self._ui_pending, []
             self.packets_added.emit(batch)
 
     def clear(self) -> None:
+        """Empty the live buffer and emit ``cleared``. Recorded packets are kept."""
         self.live.clear()
         self._ui_pending.clear()
         self.cleared.emit()
@@ -82,9 +101,21 @@ class CaptureService(QObject):
     # -- recording --------------------------------------------------------
     @property
     def session_id(self) -> int | None:
+        """Id of the session being recorded, or None when not recording."""
         return self._session_id
 
     def start_recording(self, name: str, config: dict | None = None) -> int:
+        """Start recording packets into a new session.
+
+        Any recording in progress is stopped first.
+
+        Args:
+            name: Session name; defaults to ``"Session"`` when empty.
+            config: Settings snapshot stored with the session.
+
+        Returns:
+            The new session id.
+        """
         if self._session_id is not None:
             self.stop_recording()
         self._session_id = self.sessions.start(name or "Session", config=config)
@@ -94,6 +125,7 @@ class CaptureService(QObject):
         return self._session_id
 
     def stop_recording(self) -> None:
+        """Write pending packets and close the current session, if any."""
         if self._session_id is None:
             return
         self.flush()
@@ -104,6 +136,10 @@ class CaptureService(QObject):
         self.recording_changed.emit(None)
 
     def flush(self) -> None:
+        """Write pending recorded packets to the database in one batch.
+
+        Failures are logged rather than raised, so capture keeps running.
+        """
         if not self._db_pending:
             return
         batch, self._db_pending = self._db_pending, []
@@ -113,15 +149,30 @@ class CaptureService(QObject):
             log.exception("failed to persist captured packets", extra={"context": {"count": len(batch)}})
 
     def load_session(self, session_id: int) -> list[Packet]:
+        """Load every packet recorded in a session.
+
+        Args:
+            session_id: Session id.
+
+        Returns:
+            The packets in time order.
+        """
         return self.packets.list_for_session(session_id)
 
     # -- replay -----------------------------------------------------------
     def replay(self, packets: Iterable[Packet], connection_id: int) -> int:
-        """Re-send the payload of each packet on ``connection_id``.
+        """Re-send the payload of each packet on a connection.
 
-        Frames are sent as captured (already framed), so the connection's
-        framer re-wraps them; replay is intended for raw-framed connections.
-        Returns the number of packets sent successfully.
+        Frames are sent as captured, which means already framed, so the
+        connection's framer wraps them again. Replay is intended for raw-framed
+        connections.
+
+        Args:
+            packets: Packets to replay, in order.
+            connection_id: Open connection to send on.
+
+        Returns:
+            The number of packets sent successfully.
         """
         sent = 0
         for packet in packets:
@@ -132,6 +183,15 @@ class CaptureService(QObject):
     # -- export -----------------------------------------------------------
     @staticmethod
     def export(packets: Iterable[Packet], path: Path) -> int:
+        """Export packets to CSV, or to JSON when the path ends in ``.json``.
+
+        Args:
+            packets: Packets to export.
+            path: Destination file.
+
+        Returns:
+            The number of packets written.
+        """
         path = Path(path)
         rows = [
             {
@@ -156,5 +216,6 @@ class CaptureService(QObject):
         return len(rows)
 
     def shutdown(self) -> None:
+        """Stop recording and the UI refresh timer."""
         self.stop_recording()
         self._ui_timer.stop()

@@ -32,6 +32,11 @@ TEMPLATE = """-- Migration {number}: {title}
 
 
 def main() -> int:
+    """Create the next numbered migration file from the command line title.
+
+    Returns:
+        The process exit code, 0 on success.
+    """
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("title", help="what the migration does")
     parser.add_argument("--root", default=str(ROOT), help=argparse.SUPPRESS)

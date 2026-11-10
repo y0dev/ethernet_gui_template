@@ -49,34 +49,64 @@ class IntType:
 
     @property
     def mask(self) -> int:
+        """Bit mask covering every bit of the type, e.g. ``0xFF`` for 8 bits."""
         return (1 << self.bits) - 1
 
     @property
     def min(self) -> int:
+        """Smallest representable value."""
         return -(1 << (self.bits - 1)) if self.signed else 0
 
     @property
     def max(self) -> int:
+        """Largest representable value."""
         return (1 << (self.bits - 1)) - 1 if self.signed else self.mask
 
     @property
     def size(self) -> int:
-        """Size in bytes."""
+        """Size of the type in bytes."""
         return self.bits // 8
 
     # -- conversion -------------------------------------------------------
     def in_range(self, value: int) -> bool:
+        """Report whether a value is representable in this type.
+
+        Args:
+            value: Integer to test.
+
+        Returns:
+            True if ``min <= value <= max``.
+        """
         return self.min <= value <= self.max
 
     def wrap(self, value: int) -> int:
-        """Convert ``value`` to this type the way a C cast does (truncation)."""
+        """Convert a value to this type the way a C cast does, by truncation.
+
+        Args:
+            value: Any integer.
+
+        Returns:
+            The value reduced to this type's width, read as two's complement
+            for signed types.
+        """
         value &= self.mask
         if self.signed and value > self.max:
             value -= 1 << self.bits
         return value
 
     def check(self, value: int) -> int:
-        """Return ``value`` unchanged, or raise if it does not fit."""
+        """Return a value unchanged if it fits this type, otherwise raise.
+
+        Args:
+            value: Value to validate.
+
+        Returns:
+            ``value``.
+
+        Raises:
+            TypeError: If ``value`` is not an int, or is a bool.
+            CIntRangeError: If ``value`` is outside the type's range.
+        """
         if not isinstance(value, int) or isinstance(value, bool):
             raise TypeError(f"{self.name}: expected int, got {type(value).__name__}")
         if not self.in_range(value):
@@ -86,11 +116,33 @@ class IntType:
         return value
 
     def saturate(self, value: int) -> int:
-        """Clamp ``value`` to the representable range."""
+        """Clamp a value to the representable range.
+
+        Args:
+            value: Any integer.
+
+        Returns:
+            ``value`` limited to ``[min, max]``.
+        """
         return max(self.min, min(self.max, value))
 
     # -- arithmetic -------------------------------------------------------
-    def _result(self, exact: int, op: str, wrap_signed: bool) -> int:
+    def _checked_result(self, exact: int, op: str, wrap_signed: bool) -> int:
+        """Convert an exact arithmetic result to this type, rejecting signed overflow.
+
+        Args:
+            exact: Mathematically exact result of the operation.
+            op: Operation name, used in the error message.
+            wrap_signed: If True, signed overflow wraps (``-fwrapv``) instead of
+                raising.
+
+        Returns:
+            The result wrapped to this type.
+
+        Raises:
+            CUndefinedBehaviorError: If a signed result overflows and
+                ``wrap_signed`` is False.
+        """
         if self.signed and not wrap_signed and not self.in_range(exact):
             raise CUndefinedBehaviorError(
                 f"signed overflow in {self.name} {op} (result {exact}); "
@@ -99,19 +151,81 @@ class IntType:
         return self.wrap(exact)
 
     def add(self, a: int, b: int, *, wrap_signed: bool = False) -> int:
-        return self._result(self.check(a) + self.check(b), "add", wrap_signed)
+        """Compute C ``a + b`` in this type.
+
+        Args:
+            a: Left operand; must fit this type.
+            b: Right operand; must fit this type.
+            wrap_signed: Wrap signed overflow instead of raising.
+
+        Returns:
+            The sum converted to this type.
+
+        Raises:
+            CUndefinedBehaviorError: On signed overflow without ``wrap_signed``.
+        """
+        return self._checked_result(self.check(a) + self.check(b), "add", wrap_signed)
 
     def sub(self, a: int, b: int, *, wrap_signed: bool = False) -> int:
-        return self._result(self.check(a) - self.check(b), "sub", wrap_signed)
+        """Compute C ``a - b`` in this type.
+
+        Args:
+            a: Left operand; must fit this type.
+            b: Right operand; must fit this type.
+            wrap_signed: Wrap signed overflow instead of raising.
+
+        Returns:
+            The difference converted to this type.
+
+        Raises:
+            CUndefinedBehaviorError: On signed overflow without ``wrap_signed``.
+        """
+        return self._checked_result(self.check(a) - self.check(b), "sub", wrap_signed)
 
     def mul(self, a: int, b: int, *, wrap_signed: bool = False) -> int:
-        return self._result(self.check(a) * self.check(b), "mul", wrap_signed)
+        """Compute C ``a * b`` in this type.
+
+        Args:
+            a: Left operand; must fit this type.
+            b: Right operand; must fit this type.
+            wrap_signed: Wrap signed overflow instead of raising.
+
+        Returns:
+            The product converted to this type.
+
+        Raises:
+            CUndefinedBehaviorError: On signed overflow without ``wrap_signed``.
+        """
+        return self._checked_result(self.check(a) * self.check(b), "mul", wrap_signed)
 
     def neg(self, a: int, *, wrap_signed: bool = False) -> int:
-        return self._result(-self.check(a), "neg", wrap_signed)
+        """Compute C ``-a`` in this type.
+
+        Args:
+            a: Operand; must fit this type.
+            wrap_signed: Wrap signed overflow (``-INT_MIN``) instead of raising.
+
+        Returns:
+            The negation converted to this type.
+
+        Raises:
+            CUndefinedBehaviorError: On signed overflow without ``wrap_signed``.
+        """
+        return self._checked_result(-self.check(a), "neg", wrap_signed)
 
     def div(self, a: int, b: int) -> int:
-        """C ``a / b``: truncates toward zero."""
+        """Compute C ``a / b``, truncating toward zero.
+
+        Args:
+            a: Dividend; must fit this type.
+            b: Divisor; must fit this type.
+
+        Returns:
+            The quotient.
+
+        Raises:
+            CUndefinedBehaviorError: On division by zero or ``INT_MIN / -1``.
+        """
         self.check(a)
         self.check(b)
         if b == 0:
@@ -124,32 +238,86 @@ class IntType:
         return quotient
 
     def mod(self, a: int, b: int) -> int:
-        """C ``a % b``: result has the sign of the dividend."""
+        """Compute C ``a % b``; the result has the sign of the dividend.
+
+        Args:
+            a: Dividend; must fit this type.
+            b: Divisor; must fit this type.
+
+        Returns:
+            The remainder.
+
+        Raises:
+            CUndefinedBehaviorError: On division by zero or overflow.
+        """
         return a - self.div(a, b) * b
 
     def shl(self, a: int, count: int, *, wrap_signed: bool = False) -> int:
+        """Compute C ``a << count`` in this type.
+
+        Args:
+            a: Value to shift; must fit this type.
+            count: Shift amount, ``0 <= count < bits``.
+            wrap_signed: Allow shifting negative values and wrap signed overflow.
+
+        Returns:
+            The shifted value converted to this type.
+
+        Raises:
+            CUndefinedBehaviorError: For an invalid shift count, a negative signed
+                operand or signed overflow without ``wrap_signed``.
+        """
         self.check(a)
         self._check_shift(count)
         if self.signed and a < 0 and not wrap_signed:
             raise CUndefinedBehaviorError(f"left shift of negative {self.name}")
-        return self._result(a << count, "shl", wrap_signed)
+        return self._checked_result(a << count, "shl", wrap_signed)
 
     def shr(self, a: int, count: int) -> int:
-        """C ``a >> count`` (arithmetic shift for negative signed values)."""
+        """Compute C ``a >> count``, using an arithmetic shift for negative values.
+
+        Args:
+            a: Value to shift; must fit this type.
+            count: Shift amount, ``0 <= count < bits``.
+
+        Returns:
+            The shifted value.
+
+        Raises:
+            CUndefinedBehaviorError: If ``count`` is negative or too large.
+        """
         self.check(a)
         self._check_shift(count)
         return a >> count
 
     def _check_shift(self, count: int) -> None:
+        """Reject shift counts that are undefined behaviour in C.
+
+        Args:
+            count: Proposed shift amount.
+
+        Raises:
+            CUndefinedBehaviorError: If ``count`` is negative or at least the
+                type width.
+        """
         if count < 0 or count >= self.bits:
             raise CUndefinedBehaviorError(
                 f"shift count {count} invalid for {self.name} (width {self.bits})"
             )
 
     def bit_not(self, a: int) -> int:
+        """Compute C ``~a`` in this type.
+
+        Args:
+            a: Operand; must fit this type.
+
+        Returns:
+            The bitwise complement converted to this type.
+        """
         return self.wrap(~self.check(a))
 
     def __str__(self) -> str:
+        """Return the C type name, e.g. ``uint16_t``."""
         return self.name
 
 
@@ -167,40 +335,96 @@ BY_NAME: dict[str, IntType] = {t.name: t for t in ALL_TYPES}
 
 
 def u8(value: int) -> int:
-    """``(uint8_t)value``"""
+    """Convert like the C cast ``(uint8_t)value``.
+
+    Args:
+        value: Any integer.
+
+    Returns:
+        The value truncated to 8 unsigned bits.
+    """
     return U8.wrap(value)
 
 
 def u16(value: int) -> int:
-    """``(uint16_t)value``"""
+    """Convert like the C cast ``(uint16_t)value``.
+
+    Args:
+        value: Any integer.
+
+    Returns:
+        The value truncated to 16 unsigned bits.
+    """
     return U16.wrap(value)
 
 
 def u32(value: int) -> int:
-    """``(uint32_t)value``"""
+    """Convert like the C cast ``(uint32_t)value``.
+
+    Args:
+        value: Any integer.
+
+    Returns:
+        The value truncated to 32 unsigned bits.
+    """
     return U32.wrap(value)
 
 
 def u64(value: int) -> int:
-    """``(uint64_t)value``"""
+    """Convert like the C cast ``(uint64_t)value``.
+
+    Args:
+        value: Any integer.
+
+    Returns:
+        The value truncated to 64 unsigned bits.
+    """
     return U64.wrap(value)
 
 
 def i8(value: int) -> int:
-    """``(int8_t)value``"""
+    """Convert like the C cast ``(int8_t)value``.
+
+    Args:
+        value: Any integer.
+
+    Returns:
+        The value truncated to 8 bits as two's complement.
+    """
     return I8.wrap(value)
 
 
 def i16(value: int) -> int:
-    """``(int16_t)value``"""
+    """Convert like the C cast ``(int16_t)value``.
+
+    Args:
+        value: Any integer.
+
+    Returns:
+        The value truncated to 16 bits as two's complement.
+    """
     return I16.wrap(value)
 
 
 def i32(value: int) -> int:
-    """``(int32_t)value``"""
+    """Convert like the C cast ``(int32_t)value``.
+
+    Args:
+        value: Any integer.
+
+    Returns:
+        The value truncated to 32 bits as two's complement.
+    """
     return I32.wrap(value)
 
 
 def i64(value: int) -> int:
-    """``(int64_t)value``"""
+    """Convert like the C cast ``(int64_t)value``.
+
+    Args:
+        value: Any integer.
+
+    Returns:
+        The value truncated to 64 bits as two's complement.
+    """
     return I64.wrap(value)

@@ -34,27 +34,76 @@ class SqlRowsModel(QAbstractTableModel):
     """Read-only grid over query results; BLOBs shown as a HEX preview."""
 
     def __init__(self, parent=None) -> None:
+        """Create an empty result model.
+
+        Args:
+            parent: Optional Qt parent.
+        """
         super().__init__(parent)
         self.headers: list[str] = []
         self.rows: list[tuple[Any, ...]] = []
 
     def set_rows(self, headers: list[str], rows: list[tuple[Any, ...]]) -> None:
+        """Replace the column headers and rows and reset attached views.
+
+        Args:
+            headers: Column names.
+            rows: Result rows as tuples.
+        """
         self.beginResetModel()
         self.headers, self.rows = headers, rows
         self.endResetModel()
 
     def rowCount(self, parent=QModelIndex()) -> int:
+        """Return the number of result rows.
+
+        Args:
+            parent: Parent index; only the invalid root index has rows.
+
+        Returns:
+            The row count.
+        """
         return 0 if parent.isValid() else len(self.rows)
 
     def columnCount(self, parent=QModelIndex()) -> int:
+        """Return the number of result columns.
+
+        Args:
+            parent: Parent index; only the invalid root index has columns.
+
+        Returns:
+            The column count.
+        """
         return 0 if parent.isValid() else len(self.headers)
 
     def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):
+        """Return the horizontal header text.
+
+        Args:
+            section: Column index.
+            orientation: Header orientation.
+            role: Qt item data role.
+
+        Returns:
+            The column name for the display role, otherwise None.
+        """
         if role == Qt.ItemDataRole.DisplayRole and orientation == Qt.Orientation.Horizontal:
             return self.headers[section]
         return None
 
     def data(self, index, role=Qt.ItemDataRole.DisplayRole):
+        """Return cell data for a role.
+
+        BLOBs are shown as their size plus a hex preview, and NULLs as a dimmed
+        ``NULL``.
+
+        Args:
+            index: Cell index.
+            role: Qt item data role.
+
+        Returns:
+            The display text or foreground colour, otherwise None.
+        """
         if not index.isValid():
             return None
         value = self.rows[index.row()][index.column()]
@@ -72,6 +121,12 @@ class DatabaseExplorerPage(QWidget):
     PAGE_SIZE = 500
 
     def __init__(self, ctx: AppContext, parent: QWidget | None = None) -> None:
+        """Build the paged table browser and the saved queries tab.
+
+        Args:
+            ctx: Application context.
+            parent: Optional parent widget.
+        """
         super().__init__(parent)
         self.ctx = ctx
         self._offset = 0
@@ -82,7 +137,7 @@ class DatabaseExplorerPage(QWidget):
         refresh.clicked.connect(self.reload_tables)
         backup = QPushButton("Backup now")
         backup.setObjectName("Primary")
-        backup.clicked.connect(self.backup)
+        backup.clicked.connect(self.backup_database)
         header.actions.addWidget(refresh)
         header.actions.addWidget(backup)
         layout.addWidget(header)
@@ -114,8 +169,8 @@ class DatabaseExplorerPage(QWidget):
         pager = QHBoxLayout()
         self.prev_button = QPushButton("◀ Previous")
         self.next_button = QPushButton("Next ▶")
-        self.prev_button.clicked.connect(lambda: self._page(-1))
-        self.next_button.clicked.connect(lambda: self._page(1))
+        self.prev_button.clicked.connect(lambda: self._change_page(-1))
+        self.next_button.clicked.connect(lambda: self._change_page(1))
         self.page_label = QLabel("")
         self.page_label.setObjectName("Dim")
         pager.addWidget(self.prev_button)
@@ -130,10 +185,11 @@ class DatabaseExplorerPage(QWidget):
         tabs.addTab(self.queries, "Saved queries")
         layout.addWidget(tabs, 1)
 
-        self.tables.currentTextChanged.connect(self._select_table)
+        self.tables.currentTextChanged.connect(self._on_table_selected)
         self.reload_tables()
 
     def reload_tables(self) -> None:
+        """Reload the table list with row counts, keeping the selected table."""
         current = self.tables.currentItem().text() if self.tables.currentItem() else None
         self.tables.blockSignals(True)
         self.tables.clear()
@@ -147,17 +203,32 @@ class DatabaseExplorerPage(QWidget):
             self.tables.setCurrentRow(names.index(current))
         elif names:
             self.tables.setCurrentRow(0)
-        self._load()
+        self._load_table_page()
 
-    def _select_table(self, _name: str) -> None:
+    def _on_table_selected(self, _name: str) -> None:
+        """Show the first page of a newly selected table.
+
+        Args:
+            _name: Selected table name (read from the list instead).
+        """
         self._offset = 0
-        self._load()
+        self._load_table_page()
 
-    def _page(self, step: int) -> None:
+    def _change_page(self, step: int) -> None:
+        """Move one page forward or backward.
+
+        Args:
+            step: +1 for the next page, -1 for the previous page.
+        """
         self._offset = max(0, self._offset + step * self.PAGE_SIZE)
-        self._load()
+        self._load_table_page()
 
-    def _load(self) -> None:
+    def _load_table_page(self) -> None:
+        """Load the current page of the selected table, newest rows first.
+
+        Also updates the pager and shows the table's schema. Only names
+        returned by the database are ever put into SQL.
+        """
         item = self.tables.currentItem()
         if item is None:
             self.model.set_rows([], [])
@@ -178,7 +249,8 @@ class DatabaseExplorerPage(QWidget):
         sql = self.ctx.db.query_one("SELECT sql FROM sqlite_master WHERE name = ?", (name,))
         self.schema.setText(" ".join((sql["sql"] if sql else "").split()))
 
-    def backup(self) -> None:
+    def backup_database(self) -> None:
+        """Back up the database and report where it was written."""
         try:
             path = self.ctx.backup_database()
         except Exception as exc:
@@ -187,12 +259,25 @@ class DatabaseExplorerPage(QWidget):
         QMessageBox.information(self, "Backup", f"Backup written to\n{path}")
 
     def showEvent(self, event) -> None:  # noqa: N802
+        """Reload the table list whenever the page becomes visible.
+
+        Args:
+            event: Qt show event.
+        """
         super().showEvent(event)
         self.reload_tables()
 
 
-def _coerce(text: str) -> Any:
-    """Parameter text -> int / float / None / str."""
+def _coerce_param_text(text: str) -> Any:
+    """Convert parameter text to an SQL value.
+
+    Args:
+        text: Text typed by the user.
+
+    Returns:
+        An int or float if the text parses as one, None for empty text,
+        otherwise the original text.
+    """
     value = text.strip()
     if value == "":
         return None
@@ -208,6 +293,12 @@ class SavedQueriesPanel(QWidget):
     """Runs named queries from the .sql files (or edited SQL) read-only."""
 
     def __init__(self, ctx: AppContext, parent: QWidget | None = None) -> None:
+        """Build the query list, SQL editor, parameter inputs and result grid.
+
+        Args:
+            ctx: Application context.
+            parent: Optional parent widget.
+        """
         super().__init__(parent)
         self.ctx = ctx
         self._headers: list[str] = []
@@ -248,9 +339,9 @@ class SavedQueriesPanel(QWidget):
         row = QHBoxLayout()
         run = QPushButton("Run (read-only)")
         run.setObjectName("Primary")
-        run.clicked.connect(self.run)
+        run.clicked.connect(self.run_query)
         export = QPushButton("Export CSV…")
-        export.clicked.connect(self.export)
+        export.clicked.connect(self.export_results_csv)
         self.python_call = QLineEdit()
         self.python_call.setReadOnly(True)
         self.python_call.setFont(theme.monospace_font(9))
@@ -275,11 +366,15 @@ class SavedQueriesPanel(QWidget):
         layout.addWidget(splitter)
 
         self.list.currentItemChanged.connect(lambda *_: self.show_query())
-        self.editor.textChanged.connect(self._rebuild_params)
+        self.editor.textChanged.connect(self._rebuild_param_inputs)
         self._param_edits: dict[str, QLineEdit] = {}
         self.reload_list()
 
     def reload_list(self) -> None:
+        """Refill the query list from the SQL library, keeping the selection.
+
+        Queries that modify data are dimmed.
+        """
         library = self.ctx.db.sql
         current = self.list.currentItem().text() if self.list.currentItem() else None
         self.list.clear()
@@ -297,6 +392,10 @@ class SavedQueriesPanel(QWidget):
                 self.list.setCurrentItem(matches[0])
 
     def reload_library(self) -> None:
+        """Reload every ``.sql`` folder from disk and refresh the list.
+
+        Errors are shown in a dialog and the old library is kept.
+        """
         from ...core.database.sql_library import BUILTIN_DIR, SqlLibrary, SqlLibraryError
 
         extra = [d for d in self.ctx.db.sql.directories if d != BUILTIN_DIR]
@@ -309,6 +408,7 @@ class SavedQueriesPanel(QWidget):
         self.status.setText(f"Loaded {len(self.ctx.db.sql.queries)} queries")
 
     def show_query(self) -> None:
+        """Show the selected query's description, SQL and Python call."""
         item = self.list.currentItem()
         if item is None:
             return
@@ -319,7 +419,8 @@ class SavedQueriesPanel(QWidget):
         args = ", ".join(f"{p}=..." for p in q.parameters)
         self.python_call.setText(f'ctx.db.run("{q.name}"{", " + args if args else ""})')
 
-    def _rebuild_params(self) -> None:
+    def _rebuild_param_inputs(self) -> None:
+        """Recreate one input per ``:param`` in the editor, keeping typed values."""
         from ...core.database.sql_library import NamedQuery
 
         names = NamedQuery("adhoc", self.editor.toPlainText()).parameters
@@ -330,15 +431,20 @@ class SavedQueriesPanel(QWidget):
         for name in names:
             edit = QLineEdit(old.get(name, ""))
             edit.setPlaceholderText("number or text; empty = NULL")
-            edit.returnPressed.connect(self.run)
+            edit.returnPressed.connect(self.run_query)
             self.params.addRow(f":{name}", edit)
             self._param_edits[name] = edit
 
-    def run(self) -> None:
+    def run_query(self) -> None:
+        """Run the editor's SQL read-only with the entered parameters.
+
+        Pending captured packets are written first so they are visible.
+        Errors are shown in a dialog.
+        """
         sql = self.editor.toPlainText().strip().rstrip(";")
         if not sql:
             return
-        params = {name: _coerce(edit.text()) for name, edit in self._param_edits.items()}
+        params = {name: _coerce_param_text(edit.text()) for name, edit in self._param_edits.items()}
         self.ctx.capture.flush()
         try:
             headers, rows = self.ctx.db.run_read_only(sql, params)
@@ -352,7 +458,8 @@ class SavedQueriesPanel(QWidget):
         self.model.set_rows(headers, self._rows)
         self.status.setText(f"{len(rows)} row(s)" + (" (first 5000 shown)" if len(rows) >= 5000 else ""))
 
-    def export(self) -> None:
+    def export_results_csv(self) -> None:
+        """Save the last query result as CSV, with BLOBs written as hex."""
         if not self._headers:
             return
         path, _ = QFileDialog.getSaveFileName(self, "Export results", "query.csv", "CSV (*.csv)")
@@ -366,5 +473,10 @@ class SavedQueriesPanel(QWidget):
         self.status.setText(f"Exported {len(self._rows)} row(s) to {path}")
 
     def showEvent(self, event) -> None:  # noqa: N802
+        """Reload the query list whenever the panel becomes visible.
+
+        Args:
+            event: Qt show event.
+        """
         super().showEvent(event)
         self.reload_list()

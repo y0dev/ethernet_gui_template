@@ -54,7 +54,7 @@ from PySide6.QtWidgets import (
 from ...context import AppContext
 from ...core.hexutil import format_hex, to_ascii
 from ...core.models import DeviceOperation, MatchMode, PayloadFormat, Transport
-from ...core.reporting import collect, render_csv, render_html, render_markdown
+from ...core.reporting import collect_session_data, render_csv, render_html, render_markdown
 from ...core.services import WorkflowError
 from ..dialogs.editors import FramingEditor
 from ..styles import theme
@@ -151,7 +151,7 @@ class ServerStep(QWidget):
         host = self.host.currentText().strip() or "0.0.0.0"
         try:
             self.wf.start_server(host, self.port.value(), Transport(self.transport.currentData()),
-                                 self.framing.value())
+                                 self.framing.framing_config())
         except (WorkflowError, ValueError) as exc:
             show_error(self, "Start server", exc)
         self.refresh()
@@ -510,7 +510,7 @@ class OperationDialog(QDialog):
         self.format.currentIndexChanged.connect(self._update)
         self.match.currentIndexChanged.connect(self._update)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
-        buttons.accepted.connect(self._accept)
+        buttons.accepted.connect(self._validate_and_accept)
         buttons.rejected.connect(self.reject)
         layout = QVBoxLayout(self)
         layout.addLayout(form)
@@ -540,7 +540,7 @@ class OperationDialog(QDialog):
             self.preview.setText(str(exc))
             self.preview.setStyleSheet(f"color: {theme.ERROR};")
 
-    def _accept(self) -> None:
+    def _validate_and_accept(self) -> None:
         try:
             op = self._build()
             op.validate()
@@ -908,7 +908,7 @@ class ReportStep(QWidget):
             return
         self.ctx.capture.flush()
         try:
-            self._data = collect(self.ctx.db, sid)
+            self._data = collect_session_data(self.ctx.db, sid)
         except Exception as exc:
             self._data = None
             self.browser.setPlainText(f"Cannot build report: {exc}")

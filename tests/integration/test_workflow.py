@@ -12,7 +12,7 @@ import pytest
 from app.context import AppContext
 from app.core.config import AppConfig
 from app.core.models import DeviceOperation, MatchMode, PayloadFormat, Transport
-from app.core.reporting import collect, render_csv, render_html, render_markdown
+from app.core.reporting import collect_session_data, render_csv, render_html, render_markdown
 from app.core.services import WorkflowError
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -143,7 +143,7 @@ def test_full_workflow(qtbot, ctx, devices, tmp_path):
     qtbot.wait(400)   # let the capture flush
     ended = wf.end_session()
     assert ended == session_id
-    data = collect(ctx.db, session_id)
+    data = collect_session_data(ctx.db, session_id)
     assert data["counts"]["passed"] == 13 and data["counts"]["failed"] == 1
     assert len(data["devices"]) == 3
     unit_a = next(d for d in data["devices"] if d["peer"] == peers[0])

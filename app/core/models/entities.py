@@ -15,6 +15,7 @@ class Transport(str, Enum):
 
     @property
     def label(self) -> str:
+        """Human-readable transport name, e.g. ``"TCP Client"``."""
         return {
             "tcp_client": "TCP Client",
             "tcp_server": "TCP Server",
@@ -37,6 +38,7 @@ class ConnectionState(str, Enum):
 
     @property
     def is_active(self) -> bool:
+        """True when the connection is connected or listening."""
         return self in (ConnectionState.CONNECTED, ConnectionState.LISTENING)
 
 
@@ -67,6 +69,7 @@ class MatchMode(str, Enum):
 
     @property
     def label(self) -> str:
+        """Human-readable description of the match rule."""
         return {
             "none": "No response expected", "any": "Any response",
             "exact": "Exactly equals", "prefix": "Starts with", "contains": "Contains",
@@ -129,6 +132,7 @@ class Packet:
 
     @property
     def length(self) -> int:
+        """Number of payload bytes in the packet."""
         return len(self.data)
 
 
@@ -151,22 +155,41 @@ class DeviceOperation:
     sort_order: int = 0
     id: int | None = None
 
-    def _encode(self, text: str) -> bytes:
+    def _parse_payload_text(self, text: str) -> bytes:
+        """Parse operation text using this operation's payload format.
+
+        Args:
+            text: Hex digits, or ASCII with escapes.
+
+        Returns:
+            The decoded bytes.
+
+        Raises:
+            ValueError: If the text is not valid for the payload format.
+        """
         from ..hexutil import parse_ascii, parse_hex
 
         return parse_hex(text) if self.payload_format is PayloadFormat.HEX else parse_ascii(text)
 
     @property
     def payload(self) -> bytes:
-        return self._encode(self.payload_text)
+        """Bytes sent to the device, decoded from ``payload_text``."""
+        return self._parse_payload_text(self.payload_text)
 
     @property
     def expected(self) -> bytes | None:
+        """Bytes the response is matched against, or None for ``NONE``/``ANY``."""
         if self.match_mode in (MatchMode.NONE, MatchMode.ANY):
             return None
-        return self._encode(self.expected_text)
+        return self._parse_payload_text(self.expected_text)
 
     def validate(self) -> None:
+        """Check that the operation can be sent and judged.
+
+        Raises:
+            ValueError: If the name or payload is empty, a match mode needs an
+                expected response that is missing, or the timeout is not positive.
+        """
         if not self.name.strip():
             raise ValueError("operation name is required")
         if not self.payload:
@@ -177,7 +200,15 @@ class DeviceOperation:
             raise ValueError("timeout must be positive")
 
     def judge(self, response: bytes) -> bool:
-        """Does ``response`` satisfy this operation's rule?"""
+        """Decide whether a device response satisfies this operation's match rule.
+
+        Args:
+            response: Response frame received from the device.
+
+        Returns:
+            True if the response passes. ``NONE`` operations never pass on a
+            response.
+        """
         expected = self.expected
         if self.match_mode is MatchMode.ANY:
             return True
@@ -190,6 +221,11 @@ class DeviceOperation:
         return expected in response
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialize the operation for JSON export.
+
+        Returns:
+            A dict in the import/export format read by :meth:`from_dict`.
+        """
         return {
             "name": self.name, "category": self.category, "description": self.description,
             "payload_format": self.payload_format.value, "payload": self.payload_text,
@@ -199,6 +235,19 @@ class DeviceOperation:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any], sort_order: int = 0) -> DeviceOperation:
+        """Build and validate an operation from its JSON export form.
+
+        Args:
+            data: Mapping with at least ``name`` and ``payload``.
+            sort_order: Position of the operation in its menu.
+
+        Returns:
+            The validated operation.
+
+        Raises:
+            KeyError: If ``name`` or ``payload`` is missing.
+            ValueError: If a value is invalid.
+        """
         op = cls(
             name=str(data["name"]), payload_text=str(data["payload"]),
             payload_format=PayloadFormat(data.get("payload_format", "hex")),

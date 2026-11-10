@@ -32,13 +32,30 @@ from .widgets.table_models import Column, RecordTableModel
 
 
 def default_pages() -> list[PageSpec]:
-    """Every built-in page in default order (used when no profile is given)."""
+    """Resolve every built-in page in default order.
+
+    Used when no project profile is given.
+
+    Returns:
+        The page specs that could be imported.
+    """
     return PageRegistry().select(None)[0]
 
 
 class MainWindow(QMainWindow):
     def __init__(self, ctx: AppContext, pages: list[PageSpec] | None = None,
                  profile: ProjectProfile | None = None) -> None:
+        """Build the sidebar, page stack, docks, menus and status bar.
+
+        The saved window layout and page are restored afterwards.
+
+        Args:
+            ctx: Application context passed to every page.
+            pages: Pages to show, in navigation order; defaults to every
+                built-in page.
+            profile: Project profile for titles and the start page; defaults to
+                the built-in profile.
+        """
         super().__init__()
         self.ctx = ctx
         self.profile = profile or ProjectProfile()
@@ -93,6 +110,7 @@ class MainWindow(QMainWindow):
 
     # -- docks ------------------------------------------------------------
     def _build_docks(self) -> None:
+        """Create the connection status and diagnostics docks and start their refresh timer."""
         self.status_model = RecordTableModel([
             Column("name", "Connection"),
             Column("state", "State", color=lambda s: theme.STATE_COLORS.get(s)),
@@ -123,20 +141,35 @@ class MainWindow(QMainWindow):
         self._dock_timer.start()
 
     def _append_log(self, entry: dict) -> None:
+        """Append one log record to the diagnostics console, coloured by level.
+
+        Args:
+            entry: Record dict from the Qt log handler.
+        """
         color = theme.LOG_LEVEL_COLORS.get(entry["level"], theme.TEXT)
         context = f" {json.dumps(entry['context'], default=str)}" if entry["context"] else ""
         from .widgets.table_models import format_timestamp
         line = f"{format_timestamp(entry['timestamp'])} {entry['level']:<7} {entry['message']}{context}"
         self.log_console.appendHtml(
-            f'<span style="color:{color}; white-space:pre">{_escape(line)}</span>'
+            f'<span style="color:{color}; white-space:pre">{_escape_html(line)}</span>'
         )
 
     def _on_connection_error(self, connection_id: int, message: str) -> None:
+        """Show a connection error in the status bar.
+
+        Args:
+            connection_id: Connection that failed.
+            message: Error description.
+        """
         config = self.ctx.connections.config(connection_id)
         name = config.name if config else str(connection_id)
         self.statusBar().showMessage(f"{name}: {message}", 6000)
 
     def _refresh_status_dock(self) -> None:
+        """Refresh the connection status table and the status bar indicators.
+
+        Skipped while the status dock is hidden.
+        """
         if not self.status_dock.isVisible():
             return
         rows = []
@@ -154,9 +187,14 @@ class MainWindow(QMainWindow):
 
     # -- menu / status ----------------------------------------------------
     def _build_menu(self) -> None:
+        """Build the File, View and Help menus.
+
+        The View menu gets a ``Ctrl+N`` shortcut for each of the first nine
+        pages.
+        """
         file_menu = self.menuBar().addMenu("&File")
         backup = QAction("Backup database", self)
-        backup.triggered.connect(self._backup)
+        backup.triggered.connect(self._backup_database)
         file_menu.addAction(backup)
         file_menu.addSeparator()
         quit_action = QAction("Quit", self)
@@ -186,6 +224,7 @@ class MainWindow(QMainWindow):
         help_menu.addAction(about)
 
     def _build_status_bar(self) -> None:
+        """Add the recording, connection and database indicators to the status bar."""
         self.conn_label = QLabel("")
         self.rec_label = QLabel("")
         db_label = QLabel(f"DB: {self.ctx.db.path.name}")
@@ -199,7 +238,8 @@ class MainWindow(QMainWindow):
             self.statusBar().addPermanentWidget(w)
         self.statusBar().showMessage("Ready", 3000)
 
-    def _backup(self) -> None:
+    def _backup_database(self) -> None:
+        """Back up the database and report the result."""
         try:
             path = self.ctx.backup_database()
             self.statusBar().showMessage(f"Backup written to {path}", 6000)
@@ -207,11 +247,20 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Backup", str(exc))
 
     # -- persistence of window layout -------------------------------------
-    def _settings(self) -> QSettings:
+    def _layout_settings(self) -> QSettings:
+        """Return the settings store for the window layout.
+
+        Returns:
+            Settings keyed by the profile's organization and application name.
+        """
         return QSettings(self.profile.organization, self.profile.app_name)
 
     def _restore_layout(self) -> None:
-        settings = self._settings()
+        """Restore the saved geometry and dock state, then select the start page.
+
+        The profile's ``start_page`` wins over the last page shown.
+        """
+        settings = self._layout_settings()
         geometry = settings.value("geometry")
         state = settings.value("windowState")
         if geometry:
@@ -219,7 +268,7 @@ class MainWindow(QMainWindow):
         if state:
             self.restoreState(state)
         else:  # first run: sensible dock sizes once the window has a size
-            QTimer.singleShot(0, self._default_dock_sizes)
+            QTimer.singleShot(0, self._apply_default_dock_sizes)
         start = self.profile.start_page
         keys = [s.key for s in self.page_specs]
         if start in keys:
@@ -228,12 +277,18 @@ class MainWindow(QMainWindow):
             row = settings.value("page", 0, int)
             self.nav.setCurrentRow(row if 0 <= row < self.nav.count() else 0)
 
-    def _default_dock_sizes(self) -> None:
+    def _apply_default_dock_sizes(self) -> None:
+        """Give the docks sensible sizes on first run."""
         self.resizeDocks([self.status_dock], [260], Qt.Orientation.Horizontal)
         self.resizeDocks([self.log_dock], [150], Qt.Orientation.Vertical)
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
-        settings = self._settings()
+        """Save the window geometry, dock state and current page before closing.
+
+        Args:
+            event: Qt close event.
+        """
+        settings = self._layout_settings()
         settings.setValue("geometry", self.saveGeometry())
         settings.setValue("windowState", self.saveState())
         settings.setValue("page", self.nav.currentRow())
@@ -241,5 +296,13 @@ class MainWindow(QMainWindow):
         super().closeEvent(event)
 
 
-def _escape(text: str) -> str:
+def _escape_html(text: str) -> str:
+    """Escape text for inclusion in HTML.
+
+    Args:
+        text: Plain text.
+
+    Returns:
+        The text with ``&``, ``<`` and ``>`` escaped.
+    """
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")

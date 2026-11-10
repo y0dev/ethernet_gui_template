@@ -31,6 +31,12 @@ from ..widgets.table_models import PacketFilterProxy, PacketTableModel, format_t
 
 class PacketMonitorPage(QWidget):
     def __init__(self, ctx: AppContext, parent: QWidget | None = None) -> None:
+        """Build the toolbar, filters, packet table and detail panes, and load live packets.
+
+        Args:
+            ctx: Application context.
+            parent: Optional parent widget.
+        """
         super().__init__(parent)
         self.ctx = ctx
         self.capture = ctx.capture
@@ -40,20 +46,20 @@ class PacketMonitorPage(QWidget):
         header = PageHeader("Packet Monitor", "Every frame sent or received on any connection, as it went over the wire.")
         self.record_button = QPushButton("● Record")
         self.record_button.setCheckable(True)
-        self.record_button.toggled.connect(self._toggle_record)
+        self.record_button.toggled.connect(self._toggle_recording)
         self.pause_button = QPushButton("Pause")
         self.pause_button.setCheckable(True)
         self.pause_button.toggled.connect(self._toggle_pause)
         clear = QPushButton("Clear")
-        clear.clicked.connect(self.clear)
+        clear.clicked.connect(self.clear_packets)
         load = QPushButton("Open session…")
         load.clicked.connect(self.open_session)
         live = QPushButton("Live")
         live.clicked.connect(self.show_live)
         export = QPushButton("Export…")
-        export.clicked.connect(self.export)
+        export.clicked.connect(self.export_packets)
         replay = QPushButton("Replay selected")
-        replay.clicked.connect(self.replay)
+        replay.clicked.connect(self.replay_selected)
         for b in (self.record_button, self.pause_button, clear, load, live, export, replay):
             header.actions.addWidget(b)
         layout.addWidget(header)
@@ -120,22 +126,27 @@ class PacketMonitorPage(QWidget):
         self.status.setObjectName("Dim")
         layout.addWidget(self.status)
 
-        self.capture.packets_added.connect(self._on_packets)
+        self.capture.packets_added.connect(self._append_live_packets)
         self.capture.cleared.connect(self.model.clear)
         self.capture.recording_changed.connect(self._on_recording_changed)
         self.ctx.connections.configs_changed.connect(self._reload_connections)
         self.direction.currentIndexChanged.connect(self._apply_filter)
         self.connection.currentIndexChanged.connect(self._apply_filter)
         self.search.textChanged.connect(self._apply_filter)
-        self.decoder.currentIndexChanged.connect(self._show_selected)
-        self.view.selectionModel().currentRowChanged.connect(lambda *_: self._show_selected())
+        self.decoder.currentIndexChanged.connect(self._show_selected_packet)
+        self.view.selectionModel().currentRowChanged.connect(lambda *_: self._show_selected_packet())
         self._reload_connections()
         self._reload_decoders()
         self.model.set_packets(list(self.capture.live))
         self._update_status()
 
     # -- data flow --------------------------------------------------------
-    def _on_packets(self, packets: list[Packet]) -> None:
+    def _append_live_packets(self, packets: list[Packet]) -> None:
+        """Append a batch of live packets unless a recorded session is being viewed.
+
+        Args:
+            packets: New packets from the capture service.
+        """
         if self._viewing_session is not None:
             return
         self.model.append(packets)
@@ -144,16 +155,19 @@ class PacketMonitorPage(QWidget):
         self._update_status()
 
     def _update_status(self) -> None:
+        """Show the shown/total packet counts and the recording state."""
         shown = self.proxy.rowCount()
         total = self.model.rowCount()
         rec = f"  ·  recording session #{self.capture.session_id}" if self.capture.session_id else ""
         self.status.setText(f"{shown:,} shown / {total:,} packets{rec}")
 
     def _apply_filter(self) -> None:
+        """Apply the direction, connection and search filters to the table."""
         self.proxy.set_filter(self.direction.currentData(), self.connection.currentData(), self.search.text())
         self._update_status()
 
     def _reload_connections(self) -> None:
+        """Refill the connection filter from the stored connections, keeping the choice."""
         current = self.connection.currentData()
         self.connection.blockSignals(True)
         self.connection.clear()
@@ -164,6 +178,7 @@ class PacketMonitorPage(QWidget):
         self.connection.blockSignals(False)
 
     def _reload_decoders(self) -> None:
+        """Refill the decoder choice from the registered protocols, keeping the choice."""
         current = self.decoder.currentData()
         self.decoder.blockSignals(True)
         self.decoder.clear()
@@ -175,10 +190,20 @@ class PacketMonitorPage(QWidget):
         self.decoder.blockSignals(False)
 
     def _selected_packets(self) -> list[Packet]:
+        """Return the packets in the selected rows.
+
+        Returns:
+            The selected packets in table order.
+        """
         rows = sorted({i.row() for i in self.view.selectionModel().selectedRows()})
         return [self.proxy.index(r, 0).data(Qt.ItemDataRole.UserRole) for r in rows]
 
-    def _show_selected(self) -> None:
+    def _show_selected_packet(self) -> None:
+        """Show the current packet's hex dump and decoded fields.
+
+        The decoder chosen in "Decode as" is used, or the packet's own protocol
+        by default. Invalid fields and decode errors are shown in red.
+        """
         index = self.view.currentIndex()
         packet: Packet | None = index.data(Qt.ItemDataRole.UserRole) if index.isValid() else None
         self.fields.clear()
@@ -210,7 +235,14 @@ class PacketMonitorPage(QWidget):
             self.fields.resizeColumnToContents(col)
 
     # -- actions ----------------------------------------------------------
-    def _toggle_record(self, on: bool) -> None:
+    def _toggle_recording(self, on: bool) -> None:
+        """Start or stop recording when the record button is toggled.
+
+        Starting asks for a session name and un-toggles the button if cancelled.
+
+        Args:
+            on: New checked state of the record button.
+        """
         if on and self.capture.session_id is None:
             name, ok = QInputDialog.getText(self, "Record session", "Session name:", text="Capture")
             if not ok:
@@ -221,6 +253,11 @@ class PacketMonitorPage(QWidget):
             self.capture.stop_recording()
 
     def _on_recording_changed(self, session_id) -> None:
+        """Sync the record button and status with the recording state.
+
+        Args:
+            session_id: Session being recorded, or None when stopped.
+        """
         self.record_button.blockSignals(True)
         self.record_button.setChecked(session_id is not None)
         self.record_button.setText("■ Stop recording" if session_id else "● Record")
@@ -229,10 +266,16 @@ class PacketMonitorPage(QWidget):
         self._update_status()
 
     def _toggle_pause(self, on: bool) -> None:
+        """Pause or resume adding live packets to the view.
+
+        Args:
+            on: True to pause.
+        """
         self.capture.paused = on
         self.pause_button.setText("Resume" if on else "Pause")
 
-    def clear(self) -> None:
+    def clear_packets(self) -> None:
+        """Clear the live buffer, or only the table when viewing a recorded session."""
         if self._viewing_session is None:
             self.capture.clear()
         else:
@@ -240,6 +283,7 @@ class PacketMonitorPage(QWidget):
         self._update_status()
 
     def open_session(self) -> None:
+        """Ask for a recorded session and show its packets instead of live traffic."""
         sessions = self.capture.sessions.list_with_counts()
         if not sessions:
             show_error(self, "Open session", "No recorded sessions yet.")
@@ -256,12 +300,14 @@ class PacketMonitorPage(QWidget):
         self._update_status()
 
     def show_live(self) -> None:
+        """Return the table to live traffic."""
         self._viewing_session = None
         self.model.set_packets(list(self.capture.live))
         self.source_label.setText("Live")
         self._update_status()
 
-    def export(self) -> None:
+    def export_packets(self) -> None:
+        """Export the selected packets, or every shown packet, to CSV or JSON."""
         packets = self._selected_packets() or [
             self.proxy.index(r, 0).data(Qt.ItemDataRole.UserRole) for r in range(self.proxy.rowCount())
         ]
@@ -275,7 +321,8 @@ class PacketMonitorPage(QWidget):
             except OSError as exc:
                 show_error(self, "Export", exc)
 
-    def replay(self) -> None:
+    def replay_selected(self) -> None:
+        """Re-send the selected packets on an open connection chosen by the user."""
         packets = self._selected_packets()
         if not packets:
             show_error(self, "Replay", "Select one or more packets to replay.")
@@ -293,5 +340,10 @@ class PacketMonitorPage(QWidget):
             self.status.setText(f"Replayed {sent} of {len(packets)} packets")
 
     def showEvent(self, event) -> None:  # noqa: N802
+        """Reload the decoder list whenever the page becomes visible.
+
+        Args:
+            event: Qt show event.
+        """
         super().showEvent(event)
         self._reload_decoders()

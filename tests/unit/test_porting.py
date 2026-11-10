@@ -129,7 +129,7 @@ def test_notes_mappings_and_report(porting):
         porting.update_module(module, test_coverage=150)
     porting.record_verification(module, ReferenceKind.GOLDEN_VECTORS, ["frame_encode"], 4, 0, True,
                                 remaining_risks="decode not yet compared")
-    report = porting.report(project)
+    report = porting.build_status_report(project)
     assert "| `net/frame.c` | `core/frame.py` | Not Analyzed | 1/2 |" in report
     assert "raises instead of returning -1" in report
     assert "decode not yet compared" in report

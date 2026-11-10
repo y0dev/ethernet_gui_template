@@ -39,6 +39,15 @@ LABELS = {
 
 class SettingsPage(QWidget):
     def __init__(self, ctx: AppContext, parent: QWidget | None = None) -> None:
+        """Build one editor per scalar configuration field.
+
+        Workflow settings and list or dict values are skipped, because the
+        Session Workflow page edits them.
+
+        Args:
+            ctx: Application context holding the configuration.
+            parent: Optional parent widget.
+        """
         super().__init__(parent)
         self.ctx = ctx
         layout = QVBoxLayout(self)
@@ -80,6 +89,10 @@ class SettingsPage(QWidget):
         layout.addStretch(1)
 
     def save(self) -> None:
+        """Validate the edited values, apply them to the configuration and save it.
+
+        Validation and save errors are shown in a dialog and nothing is applied.
+        """
         values = {}
         for name, editor in self.editors.items():
             if isinstance(editor, QComboBox):

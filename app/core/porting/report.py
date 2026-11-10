@@ -8,18 +8,35 @@ from typing import Any
 from ..models import PortingStatus, ReferenceKind
 
 
-def _fmt_time(ts: float | None) -> str:
+def _format_utc_time(ts: float | None) -> str:
+    """Format an epoch timestamp as UTC, e.g. ``2026-01-31 14:05 UTC``.
+
+    Args:
+        ts: Seconds since the Unix epoch, or None.
+
+    Returns:
+        The formatted time, or ``"-"`` for None.
+    """
     if ts is None:
         return "-"
     return dt.datetime.fromtimestamp(ts, dt.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
 
 def render_report(project: dict[str, Any], modules: list[dict[str, Any]]) -> str:
-    """``modules`` entries carry ``verification``, ``mappings``, ``notes`` keys."""
+    """Render a porting status and verification report as Markdown.
+
+    Args:
+        project: Porting project row with ``name`` and the source/target roots.
+        modules: Module rows, each with optional ``verification``,
+            ``mappings`` and ``notes`` keys.
+
+    Returns:
+        The Markdown report.
+    """
     lines = [
         f"# Porting Status Report: {project['name']}",
         "",
-        f"Generated {_fmt_time(dt.datetime.now(dt.timezone.utc).timestamp())}",
+        f"Generated {_format_utc_time(dt.datetime.now(dt.timezone.utc).timestamp())}",
         "",
         f"* C source root: `{project.get('c_source_root') or '-'}`",
         f"* Python target root: `{project.get('python_target_root') or '-'}`",
@@ -45,7 +62,7 @@ def render_report(project: dict[str, Any], modules: list[dict[str, Any]]) -> str
         total = len(m.get("mappings", []))
         if v:
             binary = {True: "yes", False: "NO", None: "not checked"}[v["binary_compatible"]]
-            vcols = f"{_fmt_time(v['executed_at'])} ({v['reference_kind'].value}) | {v['passed']} | {v['failed']} | {binary}"
+            vcols = f"{_format_utc_time(v['executed_at'])} ({v['reference_kind'].value}) | {v['passed']} | {v['failed']} | {binary}"
         else:
             vcols = "never | - | - | -"
         lines.append(

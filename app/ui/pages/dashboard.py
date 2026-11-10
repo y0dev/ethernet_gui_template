@@ -14,6 +14,12 @@ from ..widgets.table_models import Column, RecordTableModel, format_timestamp
 
 class DashboardPage(QWidget):
     def __init__(self, ctx: AppContext, parent: QWidget | None = None) -> None:
+        """Build the stat cards and tables and start the one-second refresh timer.
+
+        Args:
+            ctx: Application context.
+            parent: Optional parent widget.
+        """
         super().__init__(parent)
         self.ctx = ctx
         layout = QVBoxLayout(self)
@@ -70,19 +76,25 @@ class DashboardPage(QWidget):
         layout.addLayout(lower, 1)
 
         self._errors: deque[dict] = deque(maxlen=50)
-        ctx.log_emitter.record_logged.connect(self._on_log)
+        ctx.log_emitter.record_logged.connect(self._remember_warning)
         self._timer = QTimer(self)
         self._timer.setInterval(1000)
         self._timer.timeout.connect(self.refresh)
         self._timer.start()
         self.refresh()
 
-    def _on_log(self, entry: dict) -> None:
+    def _remember_warning(self, entry: dict) -> None:
+        """Keep warning and error log records for the recent errors table.
+
+        Args:
+            entry: Record dict from the Qt log handler.
+        """
         if entry["level"] in ("WARNING", "ERROR", "CRITICAL"):
             self._errors.appendleft({"time": entry["timestamp"], "message": entry["message"] +
                                      (f" ({entry['context'].get('error')})" if entry["context"].get("error") else "")})
 
     def refresh(self) -> None:
+        """Update the cards and tables from the services. Skipped while hidden."""
         if not self.isVisible():
             return
         ctx = self.ctx
@@ -121,5 +133,10 @@ class DashboardPage(QWidget):
         self.errors_model.set_records(list(self._errors))
 
     def showEvent(self, event) -> None:  # noqa: N802
+        """Refresh the dashboard whenever the page becomes visible.
+
+        Args:
+            event: Qt show event.
+        """
         super().showEvent(event)
         self.refresh()

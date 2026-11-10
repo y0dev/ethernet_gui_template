@@ -46,6 +46,11 @@ class ProjectProfile:
     source: str = ""
 
     def validate(self) -> None:
+        """Check that the profile's fields have the expected types and values.
+
+        Raises:
+            ProjectError: If any field is empty, mistyped or duplicated.
+        """
         if not self.app_name.strip():
             raise ProjectError("app_name must not be empty")
         if self.pages is not None:
@@ -62,6 +67,13 @@ class ProjectProfile:
             raise ProjectError("theme must be an object of colour overrides")
 
     def sql_paths(self) -> list[Path]:
+        """Resolve ``sql_dirs`` into absolute paths.
+
+        Relative entries are taken relative to the project root.
+
+        Returns:
+            The absolute folder paths, in the configured order.
+        """
         paths = []
         for value in self.sql_dirs:
             path = Path(value).expanduser()
@@ -70,11 +82,32 @@ class ProjectProfile:
 
 
 def project_path(cli_path: str | None = None) -> Path:
+    """Choose the project profile path.
+
+    Args:
+        cli_path: Path given on the command line, if any.
+
+    Returns:
+        ``cli_path``, else ``$EWB_PROJECT``, else the default ``project.json``.
+    """
     return Path(cli_path or os.environ.get("EWB_PROJECT") or DEFAULT_PROJECT_FILE)
 
 
 def load_project(path: Path | None = None) -> ProjectProfile:
-    """Read ``path``; a missing file gives the defaults (every page)."""
+    """Load and validate a project profile.
+
+    A missing file yields the default profile, which shows every page.
+
+    Args:
+        path: Location of ``project.json``, or None for the defaults.
+
+    Returns:
+        The validated project profile.
+
+    Raises:
+        ProjectError: If the file is unreadable, not a JSON object, contains
+            unknown keys or fails validation.
+    """
     if path is None or not path.exists():
         profile = ProjectProfile()
         profile.validate()
@@ -96,6 +129,15 @@ def load_project(path: Path | None = None) -> ProjectProfile:
 
 
 def save_project(profile: ProjectProfile, path: Path) -> None:
+    """Validate a profile and write it to disk as JSON.
+
+    Args:
+        profile: Profile to save; ``source`` is not written.
+        path: Destination file.
+
+    Raises:
+        ProjectError: If the profile fails validation.
+    """
     profile.validate()
     data: dict[str, Any] = {f.name: getattr(profile, f.name) for f in fields(profile) if f.name != "source"}
     path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")

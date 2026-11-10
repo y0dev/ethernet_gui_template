@@ -55,11 +55,29 @@ class CFileInventory:
     warnings: list[str] = field(default_factory=list)
 
     def by_kind(self, kind: str) -> list[CSymbol]:
+        """List the symbols of one kind.
+
+        Args:
+            kind: Symbol kind, e.g. ``"function"`` or ``"macro"``.
+
+        Returns:
+            The matching symbols in file order.
+        """
         return [s for s in self.symbols if s.kind == kind]
 
 
 def strip_comments_and_strings(source: str) -> str:
-    """Blank out comments and string/char literals, keeping line numbers."""
+    """Blank out comments and string/char literals, keeping every offset.
+
+    Characters are replaced with spaces, so line numbers and positions in
+    the result match the original. Literal delimiters are kept.
+
+    Args:
+        source: C source text.
+
+    Returns:
+        Text of the same length with comments and literal contents blanked.
+    """
     out = []
     i = 0
     n = len(source)
@@ -94,8 +112,15 @@ def strip_comments_and_strings(source: str) -> str:
     return "".join(out)
 
 
-def _blank_preprocessor(text: str) -> str:
-    """Remove preprocessor lines (including continuations) after recording them."""
+def _blank_preprocessor_lines(text: str) -> str:
+    """Blank preprocessor directives, including backslash continuations.
+
+    Args:
+        text: C source with comments already stripped.
+
+    Returns:
+        The text with every directive line emptied and line count unchanged.
+    """
     lines = text.split("\n")
     result = []
     continuing = False
@@ -109,6 +134,15 @@ def _blank_preprocessor(text: str) -> str:
 
 
 def scan_source(text: str, path: str = "") -> CFileInventory:
+    """Inventory includes, macros and top-level symbols of one C source text.
+
+    Args:
+        text: C source text.
+        path: Path recorded in the inventory.
+
+    Returns:
+        The file's inventory.
+    """
     inventory = CFileInventory(path=path)
     clean = strip_comments_and_strings(text)
 
@@ -130,12 +164,21 @@ def scan_source(text: str, path: str = "") -> CFileInventory:
             CSymbol(match.group(1), kind, clean.count("\n", 0, match.start()) + 1)
         )
 
-    code = _blank_preprocessor(clean)
+    code = _blank_preprocessor_lines(clean)
     _scan_top_level(code, inventory)
     return inventory
 
 
 def _scan_top_level(code: str, inventory: CFileInventory) -> None:
+    """Walk top-level code by brace depth and record its declarations.
+
+    Function bodies are scanned for calls. Unbalanced braces are noted as
+    warnings.
+
+    Args:
+        code: Source with comments, literals and preprocessor lines blanked.
+        inventory: Inventory to add symbols, calls and warnings to.
+    """
     depth = 0
     statement_start = 0
     current_function: str | None = None
@@ -169,18 +212,39 @@ def _scan_top_level(code: str, inventory: CFileInventory) -> None:
         inventory.warnings.append("unterminated block at end of file")
 
 
-def _line_of(code: str, offset: int, text: str) -> int:
+def _line_number_at(code: str, offset: int, text: str) -> int:
+    """Return the 1-based line where a code fragment's first non-blank character is.
+
+    Args:
+        code: Full source text.
+        offset: Offset of ``text`` within ``code``.
+        text: Fragment starting at ``offset``.
+
+    Returns:
+        The line number.
+    """
     stripped = len(text) - len(text.lstrip())
     return code.count("\n", 0, offset + stripped) + 1
 
 
 def _classify_block_head(head: str, offset: int, code: str, inv: CFileInventory) -> str | None:
+    """Classify the text before a top-level ``{`` and record its symbol.
+
+    Args:
+        head: Text from the previous statement end up to the brace.
+        offset: Offset of ``head`` within ``code``.
+        code: Full blanked source.
+        inv: Inventory to add the symbol to.
+
+    Returns:
+        The function name if the block is a function body, otherwise None.
+    """
     compact = " ".join(head.split())
     if not compact:
         return None
     tagged = _TAGGED.search(compact + "{")
     if tagged and "(" not in compact.split(tagged.group(0)[:-1])[0]:
-        inv.symbols.append(CSymbol(tagged.group(2), tagged.group(1), _line_of(code, offset, head)))
+        inv.symbols.append(CSymbol(tagged.group(2), tagged.group(1), _line_number_at(code, offset, head)))
         return None
     if compact.startswith(("struct", "union", "enum", "typedef")) or compact.endswith("="):
         return None
@@ -190,7 +254,7 @@ def _classify_block_head(head: str, offset: int, code: str, inv: CFileInventory)
         prefix_words = match.group("prefix").split()
         inv.symbols.append(
             CSymbol(
-                name, "function", _line_of(code, offset, head),
+                name, "function", _line_number_at(code, offset, head),
                 is_static="static" in prefix_words, signature=compact,
             )
         )
@@ -199,10 +263,20 @@ def _classify_block_head(head: str, offset: int, code: str, inv: CFileInventory)
 
 
 def _classify_declaration(stmt: str, offset: int, code: str, inv: CFileInventory) -> None:
+    """Record a top-level statement ending in ``;``.
+
+    The statement may be a typedef, prototype or global variable.
+
+    Args:
+        stmt: Statement text including the semicolon.
+        offset: Offset of ``stmt`` within ``code``.
+        code: Full blanked source.
+        inv: Inventory to add the symbol to.
+    """
     compact = " ".join(stmt.split())
     if not compact or compact == ";":
         return
-    line = _line_of(code, offset, stmt)
+    line = _line_number_at(code, offset, stmt)
     if compact.startswith("typedef"):
         fp = _FUNC_PTR_TYPEDEF.search(compact)
         name_match = fp or _TYPEDEF_NAME.search(compact)
@@ -231,6 +305,14 @@ def _classify_declaration(stmt: str, offset: int, code: str, inv: CFileInventory
 
 
 def _find_calls(body: str) -> set[str]:
+    """Find the names that are called in a function body.
+
+    Args:
+        body: Function body text.
+
+    Returns:
+        Every identifier followed by ``(``, excluding C keywords.
+    """
     calls = set()
     for match in re.finditer(r"\b([A-Za-z_]\w*)\s*\(", body):
         if match.group(1) not in _KEYWORDS:
@@ -239,13 +321,29 @@ def _find_calls(body: str) -> set[str]:
 
 
 def scan_file(path: Path, root: Path | None = None) -> CFileInventory:
+    """Read and inventory one C file.
+
+    Args:
+        path: File to scan.
+        root: If given, the recorded path is made relative to this folder.
+
+    Returns:
+        The file's inventory, with a forward-slash path.
+    """
     text = path.read_text(encoding="utf-8", errors="replace")
     rel = str(path.relative_to(root)) if root else str(path)
     return scan_source(text, rel.replace("\\", "/"))
 
 
 def discover_sources(root: Path) -> tuple[list[Path], list[Path]]:
-    """All ``.c`` and ``.h`` files under ``root`` (sorted, deterministic)."""
+    """Find every ``.c`` and ``.h`` file under a folder.
+
+    Args:
+        root: Folder to search recursively.
+
+    Returns:
+        The sorted source files and the sorted header files.
+    """
     sources = sorted(p for p in root.rglob("*") if p.suffix in C_EXTENSIONS and p.is_file())
     headers = sorted(p for p in root.rglob("*") if p.suffix in HEADER_EXTENSIONS and p.is_file())
     return sources, headers

@@ -19,7 +19,18 @@ log = logging.getLogger(__name__)
 
 
 def format_peer(address: QHostAddress | str, port: int) -> str:
-    """``host:port`` with IPv4-mapped IPv6 addresses shown as IPv4."""
+    """Format an address and port as ``host:port``.
+
+    IPv4-mapped IPv6 addresses are shown as IPv4, and other IPv6 addresses
+    are bracketed as ``[addr]:port``.
+
+    Args:
+        address: Qt address or host string.
+        port: Port number.
+
+    Returns:
+        The peer string.
+    """
     if isinstance(address, QHostAddress):
         text = address.toString()
         if (
@@ -36,7 +47,17 @@ def format_peer(address: QHostAddress | str, port: int) -> str:
 
 
 def parse_peer(peer: str) -> tuple[str, int]:
-    """Inverse of :func:`format_peer`."""
+    """Split a peer string produced by :func:`format_peer`.
+
+    Args:
+        peer: ``host:port`` or ``[ipv6]:port``.
+
+    Returns:
+        The host, without brackets, and the port.
+
+    Raises:
+        ValueError: If the string has no host or a non-numeric port.
+    """
     host, _, port = peer.rpartition(":")
     if not host or not port.isdigit():
         raise ValueError(f"invalid peer address {peer!r}")
@@ -44,7 +65,19 @@ def parse_peer(peer: str) -> tuple[str, int]:
 
 
 def resolve_address(host: str) -> QHostAddress:
-    """Literal IP (or ``localhost``) to QHostAddress without a blocking lookup."""
+    """Convert a literal IP address or ``localhost`` to a QHostAddress.
+
+    No DNS lookup is made, so the call never blocks.
+
+    Args:
+        host: IP address text or ``localhost``.
+
+    Returns:
+        The Qt address.
+
+    Raises:
+        ValueError: If ``host`` is not an IP address.
+    """
     if host.lower() == "localhost":
         return QHostAddress(QHostAddress.SpecialAddress.LocalHost)
     address = QHostAddress(host)
@@ -72,6 +105,11 @@ class Endpoint(QObject):
     peer_changed = Signal(str, bool)
 
     def __init__(self, parent: QObject | None = None) -> None:
+        """Initialise the endpoint as disconnected with zeroed counters.
+
+        Args:
+            parent: Optional Qt parent.
+        """
         super().__init__(parent)
         self._state = ConnectionState.DISCONNECTED
         self.rx_bytes = 0
@@ -84,55 +122,114 @@ class Endpoint(QObject):
     # -- state ------------------------------------------------------------
     @property
     def state(self) -> ConnectionState:
+        """Current connection state."""
         return self._state
 
     def _set_state(self, state: ConnectionState) -> None:
+        """Change the state and emit ``state_changed`` if it differs.
+
+        Args:
+            state: New state.
+        """
         if state is not self._state:
             self._state = state
             self.state_changed.emit(state.value)
 
     def _report_error(self, message: str) -> None:
+        """Count, log and emit an error.
+
+        Args:
+            message: Human-readable error description.
+        """
         self.error_count += 1
         self.last_error = message
         log.warning("network error", extra={"context": {"endpoint": self.objectName(), "error": message}})
         self.error_occurred.emit(message)
         self.counters_changed.emit()
 
-    def _count_rx(self, frame: bytes, peer: str) -> None:
+    def _emit_received_frame(self, frame: bytes, peer: str) -> None:
+        """Count a received frame and emit ``frame_received``.
+
+        Received bytes are counted by the subclass when data arrives.
+
+        Args:
+            frame: Complete received frame.
+            peer: Sender, ``host:port``.
+        """
         self.rx_frames += 1
         self.frame_received.emit(frame, peer)
 
-    def _count_tx(self, frame: bytes, peer: str) -> None:
+    def _emit_sent_frame(self, frame: bytes, peer: str) -> None:
+        """Count a sent frame and emit ``frame_sent`` and ``counters_changed``.
+
+        Args:
+            frame: Bytes written to the socket.
+            peer: Destination, ``host:port``.
+        """
         self.tx_bytes += len(frame)
         self.tx_frames += 1
         self.frame_sent.emit(frame, peer)
         self.counters_changed.emit()
 
     def reset_counters(self) -> None:
+        """Zero the byte, frame and error counters."""
         self.rx_bytes = self.tx_bytes = self.rx_frames = self.tx_frames = self.error_count = 0
         self.counters_changed.emit()
 
     # -- interface --------------------------------------------------------
     def open(self) -> None:
-        """Start connecting / listening.  Returns immediately."""
+        """Start connecting or listening without blocking.
+
+        Raises:
+            NotImplementedError: In the base class.
+        """
         raise NotImplementedError
 
     def close(self) -> None:
-        """Stop and release the socket.  Safe to call in any state."""
+        """Stop and release the socket. Safe to call in any state.
+
+        Raises:
+            NotImplementedError: In the base class.
+        """
         raise NotImplementedError
 
     def send(self, payload: bytes, peer: str | None = None) -> bool:
-        """Frame and queue ``payload``; ``False`` if it could not be queued."""
+        """Frame and queue a payload for sending.
+
+        Args:
+            payload: Application bytes.
+            peer: Destination for server endpoints; None means every peer, or the
+                only peer.
+
+        Returns:
+            False if the payload could not be queued.
+
+        Raises:
+            NotImplementedError: In the base class.
+        """
         raise NotImplementedError
 
     def local_address(self) -> str:
-        """``host:port`` the socket is bound to, or ``""``."""
+        """Return the address the socket is bound to.
+
+        Returns:
+            ``host:port``, or ``""`` when not bound.
+        """
         return ""
 
     def peers(self) -> list[str]:
-        """Currently connected remote peers."""
+        """List the currently connected remote peers.
+
+        Returns:
+            Peer strings; empty for the base class.
+        """
         return []
 
 
 def default_framer_factory() -> Framer:
+    """Create the default framer for endpoints without explicit framing.
+
+    Returns:
+        A new raw (pass-through) framer.
+    """
     return RawFramer()

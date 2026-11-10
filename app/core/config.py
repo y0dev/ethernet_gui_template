@@ -54,6 +54,11 @@ class AppConfig:
     recent_databases: list[str] = field(default_factory=list)
 
     def validate(self) -> None:
+        """Check numeric limits, the log level and workflow server settings.
+
+        Raises:
+            ConfigError: If any value is out of range or has the wrong type.
+        """
         if self.log_level not in LOG_LEVELS:
             raise ConfigError(f"log_level must be one of {LOG_LEVELS}")
         for name in (
@@ -74,16 +79,41 @@ class AppConfig:
             raise ConfigError("recent_databases must be a list")
 
     def remember_database(self, path: str, keep: int = 8) -> None:
+        """Move a database path to the front of the recent-databases list.
+
+        Args:
+            path: Database file that was just opened.
+            keep: Maximum number of entries to retain.
+        """
         self.recent_databases = [path] + [p for p in self.recent_databases if p != path]
         del self.recent_databases[keep:]
 
     def resolve(self, value: str) -> Path:
-        """Absolute path for a possibly project-relative config path."""
+        """Resolve a configured path to an absolute path.
+
+        Args:
+            value: Absolute path, or a path relative to the project root.
+                ``~`` is expanded.
+
+        Returns:
+            The absolute path.
+        """
         path = Path(value).expanduser()
         return path if path.is_absolute() else PROJECT_ROOT / path
 
 
 def _read_json(path: Path) -> dict[str, Any]:
+    """Read a file that must contain a JSON object.
+
+    Args:
+        path: JSON file to read.
+
+    Returns:
+        The decoded object.
+
+    Raises:
+        ConfigError: If the file cannot be read or parsed, or is not an object.
+    """
     try:
         with path.open(encoding="utf-8") as handle:
             data = json.load(handle)
@@ -95,11 +125,32 @@ def _read_json(path: Path) -> dict[str, Any]:
 
 
 def config_path(cli_path: str | None = None) -> Path:
+    """Choose the runtime configuration path.
+
+    Args:
+        cli_path: Path given on the command line, if any.
+
+    Returns:
+        ``cli_path``, else ``$EWB_CONFIG``, else ``data/config.json``.
+    """
     return Path(cli_path or os.environ.get("EWB_CONFIG") or DEFAULT_CONFIG_FILE)
 
 
 def load_config(path: Path | None = None) -> AppConfig:
-    """Load configuration; a missing user file simply yields the defaults."""
+    """Load configuration, layering the user file over the shipped defaults.
+
+    A missing user file yields the defaults. Unknown keys are logged and
+    ignored.
+
+    Args:
+        path: User configuration file, or None to use only the defaults.
+
+    Returns:
+        The validated configuration.
+
+    Raises:
+        ConfigError: If a file is unreadable or a value is invalid.
+    """
     values: dict[str, Any] = {}
     if DEFAULTS_FILE.exists():
         values.update(_read_json(DEFAULTS_FILE))
@@ -115,6 +166,18 @@ def load_config(path: Path | None = None) -> AppConfig:
 
 
 def save_config(config: AppConfig, path: Path) -> None:
+    """Validate a configuration and write it atomically as JSON.
+
+    The file is written to a temporary sibling first and then renamed over
+    the destination.
+
+    Args:
+        config: Configuration to save.
+        path: Destination file; parent folders are created.
+
+    Raises:
+        ConfigError: If the configuration fails validation.
+    """
     config.validate()
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_suffix(path.suffix + ".tmp")

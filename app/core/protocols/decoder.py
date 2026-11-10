@@ -28,6 +28,7 @@ class DecodedField:
 
     @property
     def text(self) -> str:
+        """Display text: ``display`` if set, otherwise ``str(value)``."""
         return self.display or str(self.value)
 
 
@@ -40,6 +41,7 @@ class DecodedMessage:
 
     @property
     def valid(self) -> bool:
+        """True when there are no errors and every field passed validation."""
         return not self.errors and all(f.valid for f in self.fields)
 
 
@@ -50,31 +52,79 @@ class ProtocolDecoder(ABC):
 
     @abstractmethod
     def decode(self, frame: bytes) -> DecodedMessage:
-        """Never raises for malformed input; report problems in ``errors``."""
+        """Decode one complete frame.
+
+        This method must never raise for malformed input. Problems are reported
+        in ``DecodedMessage.errors`` instead.
+
+        Args:
+            frame: Frame as delivered by the connection's framer.
+
+        Returns:
+            The decoded message.
+        """
 
 
 class DecoderRegistry:
     """Name -> decoder lookup shared by the application."""
 
     def __init__(self) -> None:
+        """Create an empty registry."""
         self._decoders: dict[str, ProtocolDecoder] = {}
 
     def register(self, decoder: ProtocolDecoder) -> None:
+        """Register a decoder under its name, replacing any previous one.
+
+        Args:
+            decoder: Decoder to register.
+
+        Raises:
+            ValueError: If the decoder has no name.
+        """
         if not decoder.name:
             raise ValueError("decoder must have a name")
         self._decoders[decoder.name] = decoder
 
     def unregister(self, name: str) -> None:
+        """Remove a decoder. Unknown names are ignored.
+
+        Args:
+            name: Decoder name.
+        """
         self._decoders.pop(name, None)
 
     def get(self, name: str) -> ProtocolDecoder | None:
+        """Look up a decoder.
+
+        Args:
+            name: Decoder name.
+
+        Returns:
+            The decoder, or None if none is registered under that name.
+        """
         return self._decoders.get(name)
 
     def names(self) -> list[str]:
+        """List the registered decoder names.
+
+        Returns:
+            The names, sorted.
+        """
         return sorted(self._decoders)
 
     def decode(self, name: str, frame: bytes) -> DecodedMessage | None:
-        """Decode with the named decoder; ``None`` when no decoder is registered."""
+        """Decode a frame with the named decoder.
+
+        An exception raised by the decoder is turned into an error message, so
+        a decoder bug cannot take down the monitor.
+
+        Args:
+            name: Decoder name.
+            frame: Complete frame.
+
+        Returns:
+            The decoded message, or None if no decoder has that name.
+        """
         decoder = self._decoders.get(name)
         if decoder is None:
             return None

@@ -49,6 +49,7 @@ class Field:
 
     @property
     def element_size(self) -> int:
+        """Size in bytes of one element of this field."""
         if self.ctype == "bytes":
             return 1
         if self.ctype in _FLOAT_CODES:
@@ -57,10 +58,12 @@ class Field:
 
     @property
     def size(self) -> int:
+        """Total size in bytes of this field, including every array element."""
         return self.element_size * self.count
 
     @property
     def int_type(self) -> IntType | None:
+        """Fixed-width integer type of this field, or None for floats and bytes."""
         return BY_NAME.get(self.ctype)
 
 
@@ -74,6 +77,19 @@ class StructLayout:
         order: ByteOrder,
         packed: bool = True,
     ) -> None:
+        """Compute the field offsets and the ``struct`` format for the layout.
+
+        Args:
+            name: Struct name, used in error messages.
+            fields: Members in declaration order.
+            order: Byte order of the serialized data.
+            packed: True for ``#pragma pack(1)`` layout, False for natural
+                alignment with padding.
+
+        Raises:
+            ValueError: If names are duplicated, a count is below 1 or a C type is
+                unsupported.
+        """
         names = [f.name for f in fields]
         if len(set(names)) != len(names):
             raise ValueError(f"{name}: duplicate field names")
@@ -112,15 +128,28 @@ class StructLayout:
 
     @property
     def size(self) -> int:
-        """``sizeof`` the struct."""
+        """The struct's total size in bytes, like ``sizeof``."""
         return self._struct.size
 
     @property
     def format(self) -> str:
+        """The underlying ``struct`` module format string, including padding."""
         return self._struct.format
 
     def pack(self, values: Mapping[str, Any]) -> bytes:
-        """Serialize; every field is required and range-checked."""
+        """Serialize field values into the struct's binary form.
+
+        Args:
+            values: A value for every field. Arrays are given as sequences and
+                ``bytes`` fields as exact-length bytes.
+
+        Returns:
+            The packed bytes, ``size`` bytes long.
+
+        Raises:
+            KeyError: If fields are missing or unknown names are given.
+            ValueError: If an array length, bytes length or integer range is wrong.
+        """
         missing = [f.name for f in self.fields if f.name not in values]
         extra = [k for k in values if k not in self.offsets]
         if missing or extra:
@@ -146,7 +175,18 @@ class StructLayout:
         return self._struct.pack(*flat)
 
     def unpack(self, data: bytes | bytearray | memoryview, offset: int = 0) -> dict[str, Any]:
-        """Deserialize ``size`` bytes starting at ``offset``."""
+        """Deserialize one struct from a buffer.
+
+        Args:
+            data: Buffer containing the struct.
+            offset: Byte offset where the struct starts.
+
+        Returns:
+            A mapping of field name to value; arrays are returned as lists.
+
+        Raises:
+            ValueError: If fewer than ``size`` bytes are available at ``offset``.
+        """
         if offset < 0 or len(data) - offset < self.size:
             raise ValueError(
                 f"{self.name}: need {self.size} bytes at offset {offset}, have {len(data) - offset}"

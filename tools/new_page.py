@@ -34,6 +34,12 @@ from app.ui.widgets.common import PageHeader, configure_table
 
 class {cls}(QWidget):
     def __init__(self, ctx, parent: QWidget | None = None) -> None:
+        \"\"\"Build the page header, refresh button and result table.
+
+        Args:
+            ctx: Application context with every service.
+            parent: Optional parent widget.
+        \"\"\"
         super().__init__(parent)
         self.ctx = ctx
         layout = QVBoxLayout(self)
@@ -52,6 +58,7 @@ class {cls}(QWidget):
         layout.addWidget(self.status)
 
     def refresh(self) -> None:
+        \"\"\"Reload the table from a named query.\"\"\"
         # Example: a built-in named query. Add your own in sql/*.sql.
         rows = self.ctx.db.run("sessions.list_with_counts")
         headers = ["id", "name", "packet_count"]
@@ -64,16 +71,35 @@ class {cls}(QWidget):
         self.status.setText(f"{{len(rows)}} session(s)")
 
     def showEvent(self, event) -> None:  # noqa: N802
+        \"\"\"Refresh the table whenever the page becomes visible.
+
+        Args:
+            event: Qt show event.
+        \"\"\"
         super().showEvent(event)
         self.refresh()
 
 
 def register(registry) -> None:
+    \"\"\"Plugin entry point: add this page to the registry.
+
+    Args:
+        registry: Page registry to add the page to.
+    \"\"\"
     registry.add_page("{key}", "{title}", {cls}, description="{title}")
 '''
 
 
 def main() -> int:
+    """Generate a plugin page and optionally enable it in ``project.json``.
+
+    The page is inserted before ``settings`` in the page list when one
+    exists.
+
+    Returns:
+        The process exit code: 0 on success, 2 for an invalid key or an
+        existing file.
+    """
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("key", help="page key (identifier, e.g. calibration)")
     parser.add_argument("title", help="navigation title")

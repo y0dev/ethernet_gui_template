@@ -35,7 +35,15 @@ from ..widgets.common import HexView, PageHeader, configure_table, show_error
 from ..widgets.table_models import Column, RecordTableModel, format_timestamp
 
 
-def _status_color(status) -> str | None:
+def _porting_status_color(status) -> str | None:
+    """Look up the theme colour for a porting status.
+
+    Args:
+        status: ``PortingStatus`` or its string value.
+
+    Returns:
+        The colour, or None for an unknown status.
+    """
     value = status.value if hasattr(status, "value") else status
     return theme.PORTING_STATUS_COLORS.get(value)
 
@@ -44,6 +52,11 @@ class VerificationDialog(QDialog):
     """Records the outcome of a verification run that was actually executed."""
 
     def __init__(self, parent: QWidget | None = None) -> None:
+        """Build the verification result form with its confirmation checkbox.
+
+        Args:
+            parent: Optional parent widget.
+        """
         super().__init__(parent)
         self.setWindowTitle("Record verification run")
         form = QFormLayout()
@@ -75,7 +88,7 @@ class VerificationDialog(QDialog):
         form.addRow("Report / log path", self.report_path)
         self.confirm = QCheckBox("These numbers come from a test run that was executed")
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
-        buttons.accepted.connect(self._accept)
+        buttons.accepted.connect(self._validate_and_accept)
         buttons.rejected.connect(self.reject)
         layout = QVBoxLayout(self)
         layout.addLayout(form)
@@ -83,7 +96,8 @@ class VerificationDialog(QDialog):
         layout.addWidget(buttons)
         self.resize(520, 0)
 
-    def _accept(self) -> None:
+    def _validate_and_accept(self) -> None:
+        """Close only if the user confirmed that the results come from a real run."""
         if not self.confirm.isChecked():
             show_error(self, "Verification", "Only record results from tests that were actually run.")
             return
@@ -92,6 +106,12 @@ class VerificationDialog(QDialog):
 
 class PortingPage(QWidget):
     def __init__(self, ctx: AppContext, parent: QWidget | None = None) -> None:
+        """Build the project bar, module table and module detail panel.
+
+        Args:
+            ctx: Application context.
+            parent: Optional parent widget.
+        """
         super().__init__(parent)
         self.ctx = ctx
         self.service = ctx.porting
@@ -125,7 +145,7 @@ class PortingPage(QWidget):
         splitter = QSplitter(Qt.Orientation.Horizontal)
         self.modules_model = RecordTableModel([
             Column("c_source_path", "C source"), Column("python_module_path", "Python module", fmt=lambda p: p or "-"),
-            Column("status", "Status", color=_status_color),
+            Column("status", "Status", color=_porting_status_color),
             Column("test_coverage", "Coverage", fmt=lambda v: "-" if v is None else f"{v:.0f}%"),
         ])
         self.modules_view = QTableView()
@@ -135,7 +155,7 @@ class PortingPage(QWidget):
         self.modules_view.setColumnWidth(1, 200)
         self.modules_view.setColumnWidth(2, 140)
         splitter.addWidget(self.modules_view)
-        splitter.addWidget(self._detail_panel())
+        splitter.addWidget(self._build_detail_panel())
         splitter.setSizes([620, 620])
         layout.addWidget(splitter, 1)
 
@@ -144,7 +164,12 @@ class PortingPage(QWidget):
         self.reload_projects()
 
     # -- detail panel -----------------------------------------------------
-    def _detail_panel(self) -> QWidget:
+    def _build_detail_panel(self) -> QWidget:
+        """Build the module detail tabs: overview, dependencies, mapping, notes, verification and report.
+
+        Returns:
+            The panel widget, disabled until a module is selected.
+        """
         panel = QWidget()
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(6, 0, 0, 0)
@@ -189,7 +214,7 @@ class PortingPage(QWidget):
         self.tabs.addTab(overview, "Overview")
 
         self.deps_model = RecordTableModel([Column("kind", "Kind"), Column("depends_on", "Depends on")])
-        self.tabs.addTab(self._table_tab(self.deps_model, "Includes and calls to symbols not defined in this file "
+        self.tabs.addTab(self._build_table_tab(self.deps_model, "Includes and calls to symbols not defined in this file "
                                          "(from the source scan; review against the real build)."), "Dependencies")
 
         mappings = QWidget()
@@ -268,7 +293,16 @@ class PortingPage(QWidget):
         self.tabs.setEnabled(False)
         return panel
 
-    def _table_tab(self, model: RecordTableModel, caption: str) -> QWidget:
+    def _build_table_tab(self, model: RecordTableModel, caption: str) -> QWidget:
+        """Build a tab with a caption above a read-only table.
+
+        Args:
+            model: Model shown in the table.
+            caption: Explanatory text above the table.
+
+        Returns:
+            The tab widget.
+        """
         page = QWidget()
         v = QVBoxLayout(page)
         label = QLabel(caption)
@@ -283,11 +317,21 @@ class PortingPage(QWidget):
         return page
 
     # -- projects ---------------------------------------------------------
-    def _project_id(self) -> int | None:
+    def _selected_project_id(self) -> int | None:
+        """Return the id of the selected porting project.
+
+        Returns:
+            The project id, or None if there is no project.
+        """
         return self.project.currentData()
 
     def reload_projects(self, select: int | None = None) -> None:
-        current = select if select is not None else self._project_id()
+        """Refill the project list and reload its modules.
+
+        Args:
+            select: Project id to select; defaults to the current one.
+        """
+        current = select if select is not None else self._selected_project_id()
         self.project.blockSignals(True)
         self.project.clear()
         for p in self.service.list_projects():
@@ -297,6 +341,7 @@ class PortingPage(QWidget):
         self.refresh_modules()
 
     def new_project(self) -> None:
+        """Ask for a name and an optional C source root, then create a project."""
         name, ok = QInputDialog.getText(self, "New porting project", "Project name:")
         if not ok or not name.strip():
             return
@@ -309,7 +354,12 @@ class PortingPage(QWidget):
         self.reload_projects(pid)
 
     def import_sources(self) -> None:
-        pid = self._project_id()
+        """Ask for a C source folder and import every ``.c`` file under it.
+
+        The project's C source root is set if it was empty, and a summary is
+        shown.
+        """
+        pid = self._selected_project_id()
         if pid is None:
             show_error(self, "Import", "Create a project first.")
             return
@@ -333,7 +383,8 @@ class PortingPage(QWidget):
         self.refresh_modules()
 
     def add_module(self) -> None:
-        pid = self._project_id()
+        """Ask for a C source path and register it as a module."""
+        pid = self._selected_project_id()
         if pid is None:
             show_error(self, "Add module", "Create a project first.")
             return
@@ -346,7 +397,8 @@ class PortingPage(QWidget):
             self.refresh_modules()
 
     def delete_module(self) -> None:
-        module = self._module()
+        """Delete the selected module after confirmation."""
+        module = self._selected_module()
         if module and QMessageBox.question(
             self, "Delete module", f"Remove '{module['c_source_path']}' and all of its porting records?"
         ) == QMessageBox.StandardButton.Yes:
@@ -354,10 +406,11 @@ class PortingPage(QWidget):
             self.refresh_modules()
 
     def export_report(self) -> None:
-        pid = self._project_id()
+        """Show the Markdown status report and offer to save it."""
+        pid = self._selected_project_id()
         if pid is None:
             return
-        text = self.service.report(pid)
+        text = self.service.build_status_report(pid)
         self.report_view.setPlainText(text)
         path, _ = QFileDialog.getSaveFileName(self, "Save porting status report", "porting_report.md", "Markdown (*.md)")
         if path:
@@ -365,8 +418,9 @@ class PortingPage(QWidget):
 
     # -- modules ----------------------------------------------------------
     def refresh_modules(self) -> None:
-        pid = self._project_id()
-        selected = self._module()
+        """Reload the module table and project summary, keeping the selection."""
+        pid = self._selected_project_id()
+        selected = self._selected_module()
         modules = self.service.list_modules(pid) if pid is not None else []
         self.modules_model.set_records(modules)
         if pid is not None:
@@ -385,12 +439,18 @@ class PortingPage(QWidget):
                     break
         self.show_module()
 
-    def _module(self) -> dict | None:
+    def _selected_module(self) -> dict | None:
+        """Return the module in the current row.
+
+        Returns:
+            The module row, or None if nothing is selected.
+        """
         index = self.modules_view.currentIndex() if hasattr(self, "modules_view") else None
         return self.modules_model.record(index.row()) if index is not None and index.isValid() else None
 
     def show_module(self) -> None:
-        module = self._module()
+        """Fill the detail panel from the selected module, or clear it."""
+        module = self._selected_module()
         self.tabs.setEnabled(module is not None)
         if module is None:
             self.detail_title.setText("Select a module")
@@ -414,7 +474,8 @@ class PortingPage(QWidget):
         self.map_view.resizeColumnsToContents()
 
     def save_module(self) -> None:
-        module = self._module()
+        """Save the edited header paths, Python module path and coverage."""
+        module = self._selected_module()
         if module is None:
             return
         headers = [h.strip() for h in self.headers.text().split(",") if h.strip()]
@@ -427,7 +488,8 @@ class PortingPage(QWidget):
         self.refresh_modules()
 
     def apply_status(self) -> None:
-        module = self._module()
+        """Apply the chosen status; porting rule violations are shown as errors."""
+        module = self._selected_module()
         if module is None:
             return
         try:
@@ -437,11 +499,17 @@ class PortingPage(QWidget):
         self.refresh_modules()
 
     def _selected_mapping(self) -> dict | None:
+        """Return the function mapping in the first selected row.
+
+        Returns:
+            The mapping row, or None if nothing is selected.
+        """
         rows = self.map_view.selectionModel().selectedRows()
         return self.map_model.record(rows[0].row()) if rows else None
 
     def edit_mapping(self) -> None:
-        module = self._module()
+        """Ask for the Python replacement of the selected C symbol and save it."""
+        module = self._selected_module()
         mapping = self._selected_mapping()
         if module is None or mapping is None:
             return
@@ -452,7 +520,8 @@ class PortingPage(QWidget):
             self.show_module()
 
     def add_mapping(self) -> None:
-        module = self._module()
+        """Ask for a C symbol name and kind and add it as an unmapped entry."""
+        module = self._selected_module()
         if module is None:
             return
         symbol, ok = QInputDialog.getText(self, "Add symbol", "C symbol name:")
@@ -466,7 +535,8 @@ class PortingPage(QWidget):
             self.show_module()
 
     def add_note(self) -> None:
-        module = self._module()
+        """Add the typed note to the selected module."""
+        module = self._selected_module()
         if module is None or not self.note_text.text().strip():
             return
         self.service.add_note(module["id"], NoteCategory(self.note_category.currentData()), self.note_text.text())
@@ -474,7 +544,8 @@ class PortingPage(QWidget):
         self.show_module()
 
     def record_verification(self) -> None:
-        module = self._module()
+        """Record a verification run entered in the verification dialog."""
+        module = self._selected_module()
         if module is None:
             return
         dialog = VerificationDialog(self)
@@ -488,5 +559,10 @@ class PortingPage(QWidget):
             self.refresh_modules()
 
     def showEvent(self, event) -> None:  # noqa: N802
+        """Reload the modules whenever the page becomes visible.
+
+        Args:
+            event: Qt show event.
+        """
         super().showEvent(event)
         self.refresh_modules()

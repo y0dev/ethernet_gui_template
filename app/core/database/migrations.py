@@ -40,7 +40,21 @@ class Migration:
 
 
 def split_statements(sql: str) -> list[str]:
-    """Split a script into complete statements (comment-only lines dropped)."""
+    """Split a SQL script into complete statements.
+
+    SQLite's ``complete_statement`` decides where statements end, so
+    triggers and literals containing ``;`` stay intact. Leading comment-only
+    lines are dropped and trailing semicolons removed.
+
+    Args:
+        sql: Script text.
+
+    Returns:
+        The statements in order.
+
+    Raises:
+        MigrationError: If the script ends with an incomplete statement.
+    """
     statements: list[str] = []
     buffer: list[str] = []
     for line in sql.splitlines():
@@ -61,6 +75,18 @@ def split_statements(sql: str) -> list[str]:
 
 
 def load_migrations(directory: Path = SCHEMA_DIR) -> tuple[Migration, ...]:
+    """Load and validate every numbered migration file in a folder.
+
+    Args:
+        directory: Folder of ``NNNN_name.sql`` files.
+
+    Returns:
+        The migrations ordered by version.
+
+    Raises:
+        MigrationError: If a file is misnamed or empty, or the version numbers
+            are duplicated or not consecutive from 0001.
+    """
     migrations: list[Migration] = []
     for path in sorted(directory.glob("*.sql")):
         match = _FILE.match(path.name)
@@ -83,6 +109,16 @@ MIGRATIONS: tuple[Migration, ...] = load_migrations()
 
 
 def current_version(db: Database) -> int:
+    """Read the schema version of a database.
+
+    Creates the ``schema_migrations`` table if it does not exist.
+
+    Args:
+        db: Database to inspect.
+
+    Returns:
+        The highest applied migration version, or 0 for a new database.
+    """
     db.execute(
         "CREATE TABLE IF NOT EXISTS schema_migrations ("
         "version INTEGER PRIMARY KEY, name TEXT NOT NULL, "
@@ -92,7 +128,19 @@ def current_version(db: Database) -> int:
 
 
 def migrate(db: Database, migrations: tuple[Migration, ...] = MIGRATIONS) -> int:
-    """Apply all pending migrations in order; returns the resulting version."""
+    """Apply every pending migration in order, each in its own transaction.
+
+    Args:
+        db: Database to upgrade.
+        migrations: Available migrations; defaults to the bundled schema.
+
+    Returns:
+        The schema version after migrating.
+
+    Raises:
+        RuntimeError: If the database is newer than the application.
+        MigrationError: If a statement fails; that migration is rolled back.
+    """
     version = current_version(db)
     latest = max((m.version for m in migrations), default=0)
     if version > latest:

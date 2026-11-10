@@ -47,6 +47,16 @@ class DeclarativeDecoder(ProtocolDecoder):
     decoder_type = "declarative"
 
     def __init__(self, name: str, definition: Mapping[str, Any]) -> None:
+        """Create a decoder from a JSON definition, validating it first.
+
+        Args:
+            name: Protocol name.
+            definition: Layout definition in the format shown in the module
+                docstring.
+
+        Raises:
+            DefinitionError: If the definition is invalid.
+        """
         self.name = name
         self.definition = dict(definition)
         try:
@@ -57,6 +67,13 @@ class DeclarativeDecoder(ProtocolDecoder):
         self._validate()
 
     def _validate(self) -> None:
+        """Check every field specification in the definition.
+
+        Raises:
+            DefinitionError: If there are no fields, a name is missing or
+                duplicated, a type or byte order is unknown, ``length_from`` does
+                not name an earlier field, or an open-ended field is not last.
+        """
         if not self._fields:
             raise DefinitionError("definition has no fields")
         seen: set[str] = set()
@@ -82,6 +99,18 @@ class DeclarativeDecoder(ProtocolDecoder):
                     raise DefinitionError(f"field {name!r}: only the last field may omit its length")
 
     def decode(self, frame: bytes) -> DecodedMessage:
+        """Decode a frame field by field according to the definition.
+
+        Decoding stops at the first field that does not fit. Undescribed
+        trailing bytes are reported as an error.
+
+        Args:
+            frame: Complete frame.
+
+        Returns:
+            The decoded fields, bit sub-fields, a summary of the first four
+            fields, and any errors.
+        """
         message = DecodedMessage(self.name)
         values: dict[str, Any] = {}
         offset = 0
@@ -151,7 +180,19 @@ class DeclarativeDecoder(ProtocolDecoder):
 
 
 def build_decoder(name: str, decoder_type: str, definition: Mapping[str, Any]) -> ProtocolDecoder:
-    """Factory used when loading the ``protocols`` table."""
+    """Build a decoder for a row of the ``protocols`` table.
+
+    Args:
+        name: Protocol name.
+        decoder_type: Decoder kind; only ``"declarative"`` is supported.
+        definition: Decoder definition.
+
+    Returns:
+        The decoder.
+
+    Raises:
+        DefinitionError: If the type is unknown or the definition is invalid.
+    """
     if decoder_type == DeclarativeDecoder.decoder_type:
         return DeclarativeDecoder(name, definition)
     raise DefinitionError(f"unknown decoder type {decoder_type!r}")

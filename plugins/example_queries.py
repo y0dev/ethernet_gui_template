@@ -35,6 +35,12 @@ QUERIES = [
 
 class ExampleQueriesPage(QWidget):
     def __init__(self, ctx, parent: QWidget | None = None) -> None:
+        """Build the query picker, session selector and result table.
+
+        Args:
+            ctx: Application context; ``ctx.db`` runs the queries.
+            parent: Optional parent widget.
+        """
         super().__init__(parent)
         self.ctx = ctx
         layout = QVBoxLayout(self)
@@ -50,7 +56,7 @@ class ExampleQueriesPage(QWidget):
         self.session.setPrefix("session ")
         run = QPushButton("Run")
         run.setObjectName("Primary")
-        run.clicked.connect(self.run)
+        run.clicked.connect(self.run_selected_query)
         row.addWidget(self.query)
         row.addWidget(self.session)
         row.addWidget(run)
@@ -63,7 +69,12 @@ class ExampleQueriesPage(QWidget):
         self.status.setObjectName("Dim")
         layout.addWidget(self.status)
 
-    def run(self) -> None:
+    def run_selected_query(self) -> None:
+        """Run the selected named query and show its rows in the table.
+
+        The session number is passed only to queries that take a
+        ``:session_id`` parameter. Errors are shown in a dialog.
+        """
         name = self.query.currentData()
         query = self.ctx.db.sql.get(name)
         params = {"session_id": self.session.value()} if "session_id" in query.parameters else {}
@@ -85,5 +96,10 @@ class ExampleQueriesPage(QWidget):
 
 
 def register(registry) -> None:
+    """Plugin entry point: add the example queries page.
+
+    Args:
+        registry: Page registry to add the page to.
+    """
     registry.add_page("example_queries", "My Queries", ExampleQueriesPage,
                       description="Example plugin page using sql/example.sql")

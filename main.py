@@ -34,6 +34,16 @@ log = logging.getLogger(__name__)
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
+    """Parse the application's command-line arguments.
+
+    Unknown arguments are ignored so Qt can consume its own options.
+
+    Args:
+        argv: Command-line arguments, excluding the program name.
+
+    Returns:
+        The parsed namespace with ``config``, ``project`` and ``smoke_test``.
+    """
     parser = argparse.ArgumentParser(description="Embedded Systems Workbench")
     parser.add_argument("--config", help="path to the runtime configuration JSON")
     parser.add_argument("--project", help="path to the project profile JSON (default project.json)")
@@ -43,13 +53,23 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Start the workbench GUI and run the Qt event loop.
+
+    Args:
+        argv: Full argument vector including the program name. Defaults to
+            ``sys.argv``.
+
+    Returns:
+        The process exit code: 0 on success, 2 for profile or configuration
+        errors, or the smoke-test result.
+    """
     argv = sys.argv if argv is None else argv
     args = parse_args(argv[1:])
     app = QApplication(argv)
 
     try:
         profile = load_project(project_path(args.project))
-        theme.configure(profile.theme)
+        theme.configure_colors(profile.theme)
     except (ProjectError, ValueError) as exc:
         QMessageBox.critical(None, "Project profile error", str(exc))
         return 2
@@ -85,16 +105,21 @@ def main(argv: list[str] | None = None) -> int:
         if problems:
             log.error("plugin problems: %s", problems)
 
-        def visit(row: int = 0) -> None:
+        def visit_next_page(row: int = 0) -> None:
+            """Select each navigation page in turn, then exit the smoke test.
+
+            Args:
+                row: Index of the navigation row to visit next.
+            """
             if row < window.nav.count():
                 window.nav.setCurrentRow(row)
-                QTimer.singleShot(50, lambda: visit(row + 1))
+                QTimer.singleShot(50, lambda: visit_next_page(row + 1))
             else:
                 log.info("smoke test complete")
                 window.close()
                 app.exit(1 if problems else 0)
 
-        QTimer.singleShot(200, visit)
+        QTimer.singleShot(200, visit_next_page)
 
     return app.exec()
 

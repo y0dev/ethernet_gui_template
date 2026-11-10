@@ -55,7 +55,10 @@ class NamedQuery:
 
     @property
     def parameters(self) -> list[str]:
-        """Named parameters in order of first appearance (``:name``)."""
+        """Named ``:param`` placeholders, in order of first appearance.
+
+        Placeholders inside string literals and comments are ignored.
+        """
         seen: list[str] = []
         for match in _PARAM.finditer(_strip_literals(self.sql)):
             if match.group(1) not in seen:
@@ -64,23 +67,54 @@ class NamedQuery:
 
     @property
     def read_only(self) -> bool:
-        """Best-effort hint used by the UI; the Explorer also enforces it with a
-        read-only connection."""
+        """Best-effort hint that the query only reads data.
+
+        The UI uses this hint. The Explorer also enforces read-only access with
+        a read-only connection.
+        """
         first = _strip_comments(self.sql).lstrip().split(None, 1)
         return bool(first) and first[0].lower() in _READ_ONLY_START
 
 
 def _strip_comments(sql: str) -> str:
+    """Remove ``--`` comment lines from SQL text.
+
+    Args:
+        sql: SQL text.
+
+    Returns:
+        The SQL without lines that start with ``--``.
+    """
     return "\n".join(line for line in sql.splitlines() if not line.lstrip().startswith("--"))
 
 
 def _strip_literals(sql: str) -> str:
-    """Remove string literals and comments so ':x' inside them is not a parameter."""
+    """Remove comments and string literals so ``:x`` inside them is not a parameter.
+
+    Args:
+        sql: SQL text.
+
+    Returns:
+        The SQL with comment lines dropped and every literal replaced by ``''``.
+    """
     sql = _strip_comments(sql)
     return re.sub(r"'(?:[^']|'')*'", "''", sql)
 
 
 def parse_sql_file(text: str, source: str = "") -> list[NamedQuery]:
+    """Parse the named queries from the text of one ``.sql`` file.
+
+    Args:
+        text: File contents in the ``-- name:`` format.
+        source: File name, used in error messages and ``NamedQuery.source``.
+
+    Returns:
+        The queries in file order.
+
+    Raises:
+        SqlLibraryError: If SQL appears before the first name line, a query is
+            empty or incomplete, or a name is duplicated.
+    """
     queries: list[NamedQuery] = []
     name: str | None = None
     start_line = 0
@@ -88,7 +122,12 @@ def parse_sql_file(text: str, source: str = "") -> list[NamedQuery]:
     body: list[str] = []
     in_description = False
 
-    def flush() -> None:
+    def finish_current_query() -> None:
+        """Store the query collected so far, if any, after validating it.
+
+        Raises:
+            SqlLibraryError: If the query is empty or not a complete statement.
+        """
         if name is None:
             return
         sql = "\n".join(body).strip()
@@ -102,7 +141,7 @@ def parse_sql_file(text: str, source: str = "") -> list[NamedQuery]:
     for number, line in enumerate(text.splitlines(), start=1):
         match = _NAME.match(line.strip())
         if match:
-            flush()
+            finish_current_query()
             name, start_line, description, body, in_description = match.group(1), number, [], [], True
             continue
         if name is None:
@@ -114,7 +153,7 @@ def parse_sql_file(text: str, source: str = "") -> list[NamedQuery]:
             continue
         in_description = False
         body.append(line)
-    flush()
+    finish_current_query()
     names = [q.name for q in queries]
     duplicates = {n for n in names if names.count(n) > 1}
     if duplicates:
@@ -129,13 +168,32 @@ class SqlLibrary:
 
     @classmethod
     def load(cls, directories: Iterable[str | Path] = ()) -> SqlLibrary:
-        """Built-in queries, then each directory in order (later overrides)."""
+        """Load the built-in queries, then each extra folder in order.
+
+        Queries in later folders override earlier ones with the same name.
+
+        Args:
+            directories: Extra folders of ``.sql`` files.
+
+        Returns:
+            The loaded library.
+        """
         library = cls()
         for directory in [BUILTIN_DIR, *[Path(d) for d in directories]]:
             library.add_directory(directory)
         return library
 
     def add_directory(self, directory: Path) -> None:
+        """Add every ``.sql`` file in a folder, overriding queries with the same name.
+
+        A missing folder is skipped and logged. Overrides are logged as warnings.
+
+        Args:
+            directory: Folder to load.
+
+        Raises:
+            SqlLibraryError: If a file is malformed.
+        """
         directory = Path(directory)
         if not directory.is_dir():
             if directory != BUILTIN_DIR:
@@ -153,13 +211,40 @@ class SqlLibrary:
                 self.queries[query.name] = query
 
     def get(self, name: str) -> NamedQuery:
+        """Look up a query by name.
+
+        Args:
+            name: Query name.
+
+        Returns:
+            The named query.
+
+        Raises:
+            SqlLibraryError: If no query has that name.
+        """
         try:
             return self.queries[name]
         except KeyError:
             raise SqlLibraryError(f"unknown SQL query '{name}' (looked in {[str(d) for d in self.directories]})") from None
 
     def names(self, prefix: str = "") -> list[str]:
+        """List query names, optionally filtered by prefix.
+
+        Args:
+            prefix: Only names starting with this text are returned.
+
+        Returns:
+            The matching names, sorted.
+        """
         return sorted(n for n in self.queries if n.startswith(prefix))
 
     def __contains__(self, name: str) -> bool:
+        """Report whether a query with this name is loaded.
+
+        Args:
+            name: Query name.
+
+        Returns:
+            True if the library contains the query.
+        """
         return name in self.queries

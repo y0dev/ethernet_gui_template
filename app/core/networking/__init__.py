@@ -7,7 +7,19 @@ from .udp import UdpClient, UdpServer
 
 
 def create_endpoint(config: ConnectionConfig) -> Endpoint:
-    """Build the endpoint described by a connection configuration."""
+    """Build the endpoint described by a connection configuration.
+
+    The framing options are validated before any endpoint is created.
+
+    Args:
+        config: Connection configuration.
+
+    Returns:
+        An unopened TCP or UDP client or server endpoint.
+
+    Raises:
+        ValueError: If the framing options or the transport are invalid.
+    """
     create_framer(config.framing)  # validate the framing options up front
     if config.transport is Transport.TCP_CLIENT:
         return TcpClient(

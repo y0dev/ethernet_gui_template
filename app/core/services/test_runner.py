@@ -41,11 +41,20 @@ class SuiteSummary:
 
     @property
     def total(self) -> int:
+        """Number of tests counted in every status."""
         return self.passed + self.failed + self.errors + self.skipped
 
 
 def parse_junit(path: Path) -> list[dict[str, Any]]:
-    """Flatten a JUnit XML file into ``{suite, name, status, message, duration_ms}``."""
+    """Flatten a JUnit XML report into one dict per test case.
+
+    Args:
+        path: JUnit XML file written by pytest.
+
+    Returns:
+        Dicts with ``suite``, ``name``, ``status`` (``passed``, ``failed``,
+        ``error`` or ``skipped``), ``message`` and ``duration_ms``.
+    """
     root = ET.parse(path).getroot()
     results = []
     for case in root.iter("testcase"):
@@ -75,6 +84,13 @@ class TestRunner(QObject):
     suite_finished = Signal(object)           # SuiteSummary
 
     def __init__(self, db: Database, connections: ConnectionManager, parent: QObject | None = None) -> None:
+        """Create the runner and start listening for received packets.
+
+        Args:
+            db: Shared database for test cases and results.
+            connections: Used to send requests and receive responses.
+            parent: Optional Qt parent.
+        """
         super().__init__(parent)
         self.cases = TestCaseRepository(db)
         self.results = TestResultRepository(db)
@@ -91,6 +107,23 @@ class TestRunner(QObject):
         self, name: str, request: bytes, expected: bytes | None, connection_id: int | None,
         timeout_ms: int = 2000, description: str = "", case_id: int | None = None,
     ) -> int:
+        """Validate and store a device request/response test case.
+
+        Args:
+            name: Case name.
+            request: Bytes to send.
+            expected: Exact expected response, or None if no response is expected.
+            connection_id: Connection the case runs on.
+            timeout_ms: How long to wait for the response.
+            description: Free-text description.
+            case_id: Id of an existing case to update, or None to insert.
+
+        Returns:
+            The case id.
+
+        Raises:
+            ValueError: If the name or request is empty.
+        """
         if not name.strip():
             raise ValueError("test case name is required")
         if not request:
@@ -105,6 +138,17 @@ class TestRunner(QObject):
         return case_id
 
     def run_case(self, case_id: int) -> None:
+        """Send a test case's request and wait asynchronously for the response.
+
+        The result is recorded and emitted through ``case_finished``. A case
+        that is already running is ignored.
+
+        Args:
+            case_id: Test case id.
+
+        Raises:
+            KeyError: If the case does not exist.
+        """
         case = self.cases.get_row(case_id)
         if case is None:
             raise KeyError(f"test case {case_id} not found")
@@ -112,7 +156,7 @@ class TestRunner(QObject):
             return
         connection_id = case["connection_id"]
         if connection_id is None or self.connections.endpoint(connection_id) is None:
-            self._finish(case_id, "error", "connection is not open", None, 0.0)
+            self._record_case_result(case_id, "error", "connection is not open", None, 0.0)
             return
         timer = QTimer(self)
         timer.setSingleShot(True)
@@ -120,15 +164,21 @@ class TestRunner(QObject):
         self._active[case_id] = {"case": case, "start": time.perf_counter(), "timer": timer}
         if not self.connections.send(connection_id, bytes(case["request"])):
             self._active.pop(case_id)
-            self._finish(case_id, "error", "request could not be sent", None, 0.0)
+            self._record_case_result(case_id, "error", "request could not be sent", None, 0.0)
             return
         if case["expected_response"] is None:
             self._active.pop(case_id)
-            self._finish(case_id, "passed", "request sent (no response expected)", None, 0.0)
+            self._record_case_result(case_id, "passed", "request sent (no response expected)", None, 0.0)
             return
         timer.start(case["timeout_ms"])
 
     def _on_packet(self, packet: Packet) -> None:
+        """Compare a received frame with the expected response of active cases.
+
+        Args:
+            packet: Packet from the connection manager; only RX packets on an
+                active case's connection are used.
+        """
         if packet.direction is not Direction.RX:
             return
         for case_id, state in list(self._active.items()):
@@ -139,21 +189,35 @@ class TestRunner(QObject):
             elapsed = (time.perf_counter() - state["start"]) * 1000.0
             expected = bytes(state["case"]["expected_response"])
             if packet.data == expected:
-                self._finish(case_id, "passed", "response matches", packet.data, elapsed)
+                self._record_case_result(case_id, "passed", "response matches", packet.data, elapsed)
             else:
-                self._finish(
+                self._record_case_result(
                     case_id, "failed",
                     f"expected {format_hex(expected)} got {format_hex(packet.data)}",
                     packet.data, elapsed,
                 )
 
     def _on_timeout(self, case_id: int) -> None:
+        """Fail a case whose response did not arrive in time.
+
+        Args:
+            case_id: Test case id.
+        """
         state = self._active.pop(case_id, None)
         if state:
-            self._finish(case_id, "failed", f"no response within {state['case']['timeout_ms']} ms", None,
+            self._record_case_result(case_id, "failed", f"no response within {state['case']['timeout_ms']} ms", None,
                          float(state["case"]["timeout_ms"]))
 
-    def _finish(self, case_id: int, status: str, message: str, actual: bytes | None, elapsed: float) -> None:
+    def _record_case_result(self, case_id: int, status: str, message: str, actual: bytes | None, elapsed: float) -> None:
+        """Record a case result and emit ``case_finished``.
+
+        Args:
+            case_id: Test case id.
+            status: ``passed``, ``failed`` or ``error``.
+            message: Human-readable result detail.
+            actual: Received bytes, or None.
+            elapsed: Time to the response in milliseconds.
+        """
         self.results.record(
             status, test_case_id=case_id, suite="device", actual_response=actual,
             message=message, duration_ms=elapsed,
@@ -163,9 +227,22 @@ class TestRunner(QObject):
     # -- pytest suites ----------------------------------------------------
     @property
     def suite_running(self) -> bool:
+        """True while a pytest run is in progress."""
         return self._process is not None
 
     def run_pytest(self, target: str = "tests", extra_args: list[str] | None = None) -> None:
+        """Start pytest in a child process without blocking the GUI.
+
+        Output is streamed through ``suite_output`` and the summary arrives via
+        ``suite_finished``.
+
+        Args:
+            target: Test path or node id passed to pytest.
+            extra_args: Additional pytest arguments.
+
+        Raises:
+            RuntimeError: If a run is already in progress.
+        """
         if self._process is not None:
             raise RuntimeError("a test run is already in progress")
         if self._finished_process is not None:
@@ -193,6 +270,7 @@ class TestRunner(QObject):
         process.start(sys.executable, args)
 
     def _read_suite_output(self) -> None:
+        """Forward the child process's new output through ``suite_output``."""
         if self._process is None:
             return
         text = bytes(self._process.readAllStandardOutput().data()).decode(errors="replace")
@@ -201,6 +279,12 @@ class TestRunner(QObject):
             self.suite_output.emit(text)
 
     def _on_suite_finished(self, exit_code: int, _status: QProcess.ExitStatus) -> None:
+        """Record every JUnit result of the finished run and emit the summary.
+
+        Args:
+            exit_code: pytest's exit code.
+            _status: Qt exit status (unused).
+        """
         self._read_suite_output()
         summary = SuiteSummary(exit_code=exit_code, output="".join(self._output))
         if self._junit is not None and self._junit.exists():
@@ -223,5 +307,6 @@ class TestRunner(QObject):
         self.suite_finished.emit(summary)
 
     def cancel_suite(self) -> None:
+        """Kill the running pytest process, if any."""
         if self._process is not None:
             self._process.kill()

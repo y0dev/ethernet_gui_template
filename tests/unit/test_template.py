@@ -208,14 +208,14 @@ def test_theme_overrides():
 
     original = {key: getattr(theme, attr) for key, attr in theme.THEME_KEYS.items()}
     try:
-        theme.configure({"accent": "#ff8800", "ok": "#00ff00"})
+        theme.configure_colors({"accent": "#ff8800", "ok": "#00ff00"})
         assert "#ff8800" in theme.build_stylesheet() and theme.STATE_COLORS["Connected"] == "#00ff00"
         with pytest.raises(ValueError, match="unknown theme keys"):
-            theme.configure({"accentt": "#fff"})
+            theme.configure_colors({"accentt": "#fff"})
         with pytest.raises(ValueError, match="not a colour"):
-            theme.configure({"accent": "notacolour"})
+            theme.configure_colors({"accent": "notacolour"})
     finally:
-        theme.configure(original)
+        theme.configure_colors(original)
     assert theme.ACCENT == original["accent"]
 
 

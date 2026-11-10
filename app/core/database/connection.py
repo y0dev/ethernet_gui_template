@@ -25,6 +25,13 @@ class Database:
     """Thread-safe access to one SQLite database file."""
 
     def __init__(self, path: str | Path, busy_timeout_ms: int = 5000, sql: SqlLibrary | None = None) -> None:
+        """Prepare access to a database file; connections are opened lazily.
+
+        Args:
+            path: SQLite file path, or ``":memory:"``. Parent folders are created.
+            busy_timeout_ms: How long a connection waits for a lock.
+            sql: Named-query library; defaults to the built-in queries.
+        """
         self.path = Path(path)
         #: named queries (see sql_library.py); built-ins unless the app passes more
         self.sql = sql if sql is not None else SqlLibrary.load()
@@ -39,7 +46,17 @@ class Database:
 
     # -- connections ------------------------------------------------------
     def connection(self) -> sqlite3.Connection:
-        """Return the calling thread's connection, creating it if needed."""
+        """Return the calling thread's connection, creating it if needed.
+
+        New connections use autocommit mode, WAL journaling and enforced
+        foreign keys.
+
+        Returns:
+            The thread's connection.
+
+        Raises:
+            RuntimeError: If the database has been closed.
+        """
         if self._closed:
             raise RuntimeError("database is closed")
         conn = getattr(self._local, "conn", None)
@@ -76,11 +93,13 @@ class Database:
         self._local = threading.local()
 
     def reopen(self, path: str | Path) -> None:
-        """Switch this object (and every repository using it) to another file.
+        """Switch this object, and every repository using it, to another file.
 
-        All existing connections are closed.  The caller is responsible for
-        running migrations on the new file and for making sure no transaction
-        or recording is in progress.
+        All existing connections are closed. The caller must run migrations on
+        the new file and make sure no transaction or recording is in progress.
+
+        Args:
+            path: New database file; parent folders are created.
         """
         new_path = Path(path)
         new_path.parent.mkdir(parents=True, exist_ok=True)
@@ -98,23 +117,71 @@ class Database:
 
     @property
     def closed(self) -> bool:
+        """True after :meth:`close` and before any :meth:`reopen`."""
         return self._closed
 
     # -- statements -------------------------------------------------------
     def execute(self, sql: str, params: Sequence[Any] | dict[str, Any] = ()) -> sqlite3.Cursor:
+        """Execute one SQL statement on the thread's connection.
+
+        Args:
+            sql: Statement with ``?`` or ``:name`` placeholders.
+            params: Placeholder values.
+
+        Returns:
+            The cursor.
+        """
         return self.connection().execute(sql, params)
 
     def executemany(self, sql: str, rows: Iterable[Sequence[Any]]) -> sqlite3.Cursor:
+        """Execute one SQL statement for each parameter row.
+
+        Args:
+            sql: Statement with placeholders.
+            rows: One parameter sequence per execution.
+
+        Returns:
+            The cursor.
+        """
         return self.connection().executemany(sql, rows)
 
     def query(self, sql: str, params: Sequence[Any] | dict[str, Any] = ()) -> list[sqlite3.Row]:
+        """Run a query and fetch every row.
+
+        Args:
+            sql: Query with placeholders.
+            params: Placeholder values.
+
+        Returns:
+            All result rows.
+        """
         return self.connection().execute(sql, params).fetchall()
 
     def query_one(self, sql: str, params: Sequence[Any] | dict[str, Any] = ()) -> sqlite3.Row | None:
+        """Run a query and fetch the first row.
+
+        Args:
+            sql: Query with placeholders.
+            params: Placeholder values.
+
+        Returns:
+            The first row, or None if there are no rows.
+        """
         return self.connection().execute(sql, params).fetchone()
 
     def scalar(self, sql: str, params: Sequence[Any] | dict[str, Any] = ()) -> Any:
-        """First column of the first row (for COUNT/MAX queries)."""
+        """Return the first column of the first row, for COUNT/MAX style queries.
+
+        Args:
+            sql: Query with placeholders.
+            params: Placeholder values.
+
+        Returns:
+            The scalar value.
+
+        Raises:
+            LookupError: If the query returns no rows.
+        """
         row = self.connection().execute(sql, params).fetchone()
         if row is None:
             raise LookupError(f"query returned no rows: {sql}")
@@ -122,26 +189,87 @@ class Database:
 
     # -- named queries (.sql files) ----------------------------------------
     def run(self, name: str, **params: Any) -> list[sqlite3.Row]:
-        """Rows of the named query ``name``."""
+        """Run a named query from the SQL library and fetch every row.
+
+        Args:
+            name: Query name, e.g. ``"schema.tables"``.
+            **params: Named placeholder values.
+
+        Returns:
+            All result rows.
+
+        Raises:
+            SqlLibraryError: If no query has that name.
+        """
         return self.connection().execute(self.sql.get(name).sql, params).fetchall()
 
     def run_one(self, name: str, **params: Any) -> sqlite3.Row | None:
+        """Run a named query and fetch the first row.
+
+        Args:
+            name: Query name.
+            **params: Named placeholder values.
+
+        Returns:
+            The first row, or None if there are no rows.
+
+        Raises:
+            SqlLibraryError: If no query has that name.
+        """
         return self.connection().execute(self.sql.get(name).sql, params).fetchone()
 
     def run_scalar(self, name: str, **params: Any) -> Any:
+        """Run a named query and return the first column of its first row.
+
+        Args:
+            name: Query name.
+            **params: Named placeholder values.
+
+        Returns:
+            The scalar value.
+
+        Raises:
+            SqlLibraryError: If no query has that name.
+            LookupError: If the query returns no rows.
+        """
         row = self.run_one(name, **params)
         if row is None:
             raise LookupError(f"query '{name}' returned no rows")
         return row[0]
 
     def run_write(self, name: str, **params: Any) -> int:
-        """Execute a modifying named query; returns the affected row count."""
+        """Execute a modifying named query.
+
+        Args:
+            name: Query name.
+            **params: Named placeholder values.
+
+        Returns:
+            The number of affected rows.
+
+        Raises:
+            SqlLibraryError: If no query has that name.
+        """
         return self.connection().execute(self.sql.get(name).sql, params).rowcount
 
     def run_read_only(self, sql: str, params: dict[str, Any] | Sequence[Any] = (), limit: int = 5000
                       ) -> tuple[list[str], list[tuple[Any, ...]]]:
-        """Run ``sql`` on a separate read-only connection (used by the
-        Database Explorer, so ad-hoc queries can never modify data)."""
+        """Run SQL on a separate read-only connection.
+
+        The Database Explorer uses this so ad-hoc queries can never modify data.
+
+        Args:
+            sql: Query text.
+            params: Placeholder values.
+            limit: Maximum number of rows fetched.
+
+        Returns:
+            The column headers and up to ``limit`` rows. Both are empty for
+            statements that return no result set.
+
+        Raises:
+            sqlite3.Error: If the SQL is invalid or attempts a write.
+        """
         uri = f"file:{self.path.as_posix()}?mode=ro"
         conn = sqlite3.connect(uri, uri=True)
         try:
@@ -153,16 +281,31 @@ class Database:
 
     @staticmethod
     def last_id(cursor: sqlite3.Cursor) -> int:
+        """Return the row id inserted by a cursor's last statement.
+
+        Args:
+            cursor: Cursor that executed an INSERT.
+
+        Returns:
+            The new row id.
+
+        Raises:
+            RuntimeError: If the statement did not insert a row.
+        """
         if cursor.lastrowid is None:
             raise RuntimeError("statement did not insert a row")
         return int(cursor.lastrowid)
 
     @contextmanager
     def transaction(self) -> Iterator[sqlite3.Connection]:
-        """Atomic block.  Nested blocks become savepoints.
+        """Run a block atomically; nested blocks become savepoints.
 
         The outermost block uses ``BEGIN IMMEDIATE`` so a writer conflict is
-        reported at the start instead of in the middle of the block.
+        reported at the start instead of in the middle of the block. The block
+        rolls back if it raises.
+
+        Yields:
+            The thread's connection.
         """
         conn = self.connection()
         depth = self._local.depth
@@ -183,7 +326,17 @@ class Database:
 
     # -- maintenance ------------------------------------------------------
     def backup(self, destination: str | Path) -> Path:
-        """Write a consistent copy of the live database to ``destination``."""
+        """Write a consistent copy of the live database.
+
+        Args:
+            destination: Backup file path; parent folders are created.
+
+        Returns:
+            The destination path.
+
+        Raises:
+            ValueError: If ``destination`` is the live database file.
+        """
         destination = Path(destination)
         destination.parent.mkdir(parents=True, exist_ok=True)
         if destination.resolve() == self.path.resolve():
@@ -197,4 +350,9 @@ class Database:
         return destination
 
     def table_names(self) -> list[str]:
+        """List the tables in the database.
+
+        Returns:
+            Table names, as returned by the ``schema.tables`` query.
+        """
         return [row["name"] for row in self.run("schema.tables")]

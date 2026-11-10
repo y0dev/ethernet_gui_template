@@ -56,7 +56,15 @@ class PageSpec:
     origin: str = "built-in"
 
     def resolve(self) -> PageFactory:
-        """The factory; imports ``"module:Class"`` on first use."""
+        """Return the page factory, importing a ``"module:Class"`` string on first use.
+
+        Returns:
+            The callable that builds the page widget from the context.
+
+        Raises:
+            ImportError: If the page's module cannot be imported.
+            AttributeError: If the module has no such class.
+        """
         if callable(self.factory):
             return self.factory
         module_name, _, attr = self.factory.partition(":")
@@ -68,6 +76,11 @@ class PageSpec:
 
 class PageRegistry:
     def __init__(self, include_builtins: bool = True) -> None:
+        """Create a registry, optionally pre-filled with the built-in pages.
+
+        Args:
+            include_builtins: Register every entry of ``BUILTIN_PAGES``.
+        """
         self._pages: dict[str, PageSpec] = {}
         self._order: list[str] = []
         self.startup_hooks: list[Callable[[Any], None]] = []
@@ -79,7 +92,20 @@ class PageRegistry:
     # -- plugin API -------------------------------------------------------
     def add_page(self, key: str, title: str, factory: PageFactory | str, description: str = "",
                  replace: bool = False) -> None:
-        """Register a page.  ``replace=True`` swaps a built-in for your own."""
+        """Register a page.
+
+        Args:
+            key: Unique identifier used in ``project.json``.
+            title: Navigation title.
+            factory: Widget factory taking the context, or a ``"module:Class"``
+                string imported lazily.
+            description: Text shown in the page list.
+            replace: Allow replacing an existing page, such as a built-in.
+
+        Raises:
+            RegistryError: If the key is not an identifier, or is already taken
+                and ``replace`` is False.
+        """
         if not key.isidentifier():
             raise RegistryError(f"page key {key!r} must be an identifier (letters, digits, _)")
         if key in self._pages and not replace:
@@ -89,23 +115,56 @@ class PageRegistry:
         self._pages[key] = PageSpec(key, title, factory, description, self._current_origin)
 
     def remove_page(self, key: str) -> None:
+        """Unregister a page. Unknown keys are ignored.
+
+        Args:
+            key: Page key.
+        """
         self._pages.pop(key, None)
         if key in self._order:
             self._order.remove(key)
 
     def on_startup(self, hook: Callable[[Any], None]) -> None:
-        """Call ``hook(ctx)`` once the services exist (before the window)."""
+        """Register a hook called as ``hook(ctx)`` once the services exist.
+
+        Hooks run before the main window is created.
+
+        Args:
+            hook: Callable receiving the application context.
+        """
         self.startup_hooks.append(hook)
 
     # -- queries ----------------------------------------------------------
     def keys(self) -> list[str]:
+        """List the registered page keys.
+
+        Returns:
+            The keys in registration order.
+        """
         return list(self._order)
 
     def get(self, key: str) -> PageSpec | None:
+        """Look up a registered page.
+
+        Args:
+            key: Page key.
+
+        Returns:
+            The page spec, or None if not registered.
+        """
         return self._pages.get(key)
 
     def load_plugins(self, modules: Iterable[str]) -> list[str]:
-        """Import each plugin and call its ``register(registry)``; returns problems."""
+        """Import each plugin module and call its ``register(registry)`` function.
+
+        A failing plugin is reported and skipped, never raised.
+
+        Args:
+            modules: Importable module names.
+
+        Returns:
+            One problem description per plugin that failed.
+        """
         problems = []
         for name in modules:
             self._current_origin = name
@@ -124,11 +183,18 @@ class PageRegistry:
         return problems
 
     def select(self, keys: list[str] | None) -> tuple[list[PageSpec], list[str]]:
-        """Pages to show, in order, and warnings.
+        """Choose the pages to show, in order, and collect warnings.
 
-        ``keys=None`` shows every registered page.  With an explicit list, pages
-        registered by plugins but not listed are appended (so a new plugin shows
-        up without editing the list); built-ins not listed are hidden.
+        With an explicit list, plugin pages that are not listed are appended,
+        so a new plugin appears without editing the list. Built-ins that are
+        not listed are hidden. Pages whose factory cannot be imported are
+        skipped with a warning.
+
+        Args:
+            keys: Page keys in navigation order, or None for every page.
+
+        Returns:
+            The page specs to show and the warning messages.
         """
         warnings: list[str] = []
         if keys is None:

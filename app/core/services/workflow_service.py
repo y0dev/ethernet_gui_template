@@ -54,10 +54,12 @@ class ConnectedDevice:
 
     @property
     def label(self) -> str:
+        """Display name: the assigned name, or the peer address if unnamed."""
         return self.name or self.peer
 
     @property
     def host(self) -> str:
+        """Host part of the peer address, without IPv6 brackets."""
         return self.peer.rpartition(":")[0].strip("[]")
 
 
@@ -80,6 +82,20 @@ class WorkflowService(QObject):
         save_config: Callable[[], None],
         parent: QObject | None = None,
     ) -> None:
+        """Wire the workflow to the shared services.
+
+        Args:
+            db: Shared database; it can be switched to another file in step 2.
+            config: Runtime configuration that remembers server and database
+                choices.
+            connections: Hosts the runtime server connection.
+            capture: Records session packets.
+            runner: Runs device operations.
+            devices: Device inventory used to name peers.
+            protocols: Reloaded when the database changes.
+            save_config: Persists ``config``.
+            parent: Optional Qt parent.
+        """
         super().__init__(parent)
         self.db = db
         self.config = config
@@ -102,20 +118,44 @@ class WorkflowService(QObject):
     # ------------------------------------------------------------------
     @property
     def server_state(self) -> ConnectionState:
+        """State of the workflow server; ``DISCONNECTED`` when none is running."""
         return self.connections.state(self.server_id) if self.server_id is not None else ConnectionState.DISCONNECTED
 
     @property
     def server_running(self) -> bool:
+        """True while the workflow server is listening."""
         return self.server_state is ConnectionState.LISTENING
 
     def server_config(self) -> ConnectionConfig | None:
+        """Return the configuration of the running workflow server.
+
+        Returns:
+            The server's runtime configuration, or None when stopped.
+        """
         return self.connections.config(self.server_id) if self.server_id is not None else None
 
     def server_address(self) -> str:
+        """Return the address the workflow server is bound to.
+
+        Returns:
+            ``host:port``, or ``""`` when stopped.
+        """
         endpoint = self.connections.endpoint(self.server_id) if self.server_id is not None else None
         return endpoint.local_address() if endpoint else ""
 
     def start_server(self, host: str, port: int, transport: Transport, framing: dict[str, Any]) -> None:
+        """Start, or restart, the workflow server and remember its settings.
+
+        Args:
+            host: Bind address; ``""`` or ``0.0.0.0`` listens on every interface.
+            port: Port to listen on.
+            transport: ``TCP_SERVER`` or ``UDP_SERVER``.
+            framing: Stream framing options; UDP always uses raw framing.
+
+        Raises:
+            WorkflowError: If the transport or port is invalid, or the server
+                could not start listening.
+        """
         if transport not in (Transport.TCP_SERVER, Transport.UDP_SERVER):
             raise WorkflowError("the workflow server must be a TCP or UDP server")
         if not 1 <= port <= 65535:
@@ -144,6 +184,7 @@ class WorkflowService(QObject):
         self.server_state_changed.emit(ConnectionState.LISTENING.value)
 
     def stop_server(self) -> None:
+        """Stop the workflow server, cancel its operations and mark devices disconnected."""
         if self.server_id is None:
             return
         self.runner.cancel(self.server_id)
@@ -156,6 +197,12 @@ class WorkflowService(QObject):
         self.server_state_changed.emit(ConnectionState.DISCONNECTED.value)
 
     def _on_state_changed(self, connection_id: int, state: str) -> None:
+        """Re-emit state changes of the workflow server connection.
+
+        Args:
+            connection_id: Connection whose state changed.
+            state: New ``ConnectionState`` value.
+        """
         if connection_id == self.server_id:
             self.server_state_changed.emit(state)
 
@@ -163,6 +210,12 @@ class WorkflowService(QObject):
     # Step 2: database
     # ------------------------------------------------------------------
     def database_info(self) -> dict[str, Any]:
+        """Summarise the current database.
+
+        Returns:
+            A dict with ``path``, ``exists``, ``schema_version``, ``sessions``,
+            ``operations`` and ``devices``.
+        """
         counts = self.db.run_one("stats.database_summary")
         return {
             "path": str(self.db.path),
@@ -174,13 +227,26 @@ class WorkflowService(QObject):
         }
 
     def use_current_database(self) -> None:
+        """Confirm the already-open database for this workflow and remember it."""
         self.database_confirmed = True
         self.config.remember_database(str(self.db.path))
         self._persist_config()
         self.database_changed.emit(str(self.db.path))
 
     def open_database(self, path: str | Path, make_default: bool = False) -> None:
-        """Switch every service to ``path`` (created and migrated if new)."""
+        """Switch every service to another database file.
+
+        The file is created and migrated if it is new. If migration fails, the
+        previous database is reopened.
+
+        Args:
+            path: Database file ending in ``.db``, ``.sqlite`` or ``.sqlite3``.
+            make_default: Also make it the database opened at start-up.
+
+        Raises:
+            WorkflowError: If a session is being recorded, the extension is
+                wrong, or the file cannot be migrated.
+        """
         if self.capture.session_id is not None:
             raise WorkflowError("finish the current session before switching databases")
         path = Path(path).expanduser().resolve()
@@ -210,9 +276,22 @@ class WorkflowService(QObject):
     # ------------------------------------------------------------------
     @property
     def session_id(self) -> int | None:
+        """Id of the session being recorded, or None."""
         return self.capture.session_id
 
     def start_session(self, name: str) -> int:
+        """Start recording a session and register the devices already connected.
+
+        Args:
+            name: Session name; defaults to ``"Device session"`` when empty.
+
+        Returns:
+            The new session id.
+
+        Raises:
+            WorkflowError: If the server is not running or no database has been
+                confirmed.
+        """
         if not self.server_running:
             raise WorkflowError("start the server first")
         if not self.database_confirmed:
@@ -228,12 +307,17 @@ class WorkflowService(QObject):
         now = time.time()
         for device in self.devices.values():
             if device.connected:
-                device.row_id = self.session_devices.connected(session_id, device.peer, device.name, now)
+                device.row_id = self.session_devices.record_connected(session_id, device.peer, device.name, now)
         log.info("workflow session started", extra={"context": {"session_id": session_id}})
         self.session_changed.emit(session_id)
         return session_id
 
     def end_session(self) -> int | None:
+        """Cancel pending operations, finalise device rows and stop recording.
+
+        Returns:
+            The id of the session that ended, or None if none was running.
+        """
         session_id = self.capture.session_id
         if session_id is None:
             return None
@@ -248,9 +332,25 @@ class WorkflowService(QObject):
         return session_id
 
     def connected_devices(self) -> list[ConnectedDevice]:
+        """List the devices that are currently connected.
+
+        Returns:
+            The connected devices.
+        """
         return [d for d in self.devices.values() if d.connected]
 
     def rename_device(self, peer: str, name: str, save_to_inventory: bool = False) -> None:
+        """Rename a device for the session and optionally save it to the inventory.
+
+        Args:
+            peer: Device address.
+            name: New name; surrounding whitespace is removed.
+            save_to_inventory: Also create or update a device of that name in
+                the device inventory.
+
+        Raises:
+            WorkflowError: If the peer is unknown.
+        """
         device = self.devices.get(peer)
         if device is None:
             raise WorkflowError(f"{peer} is not known")
@@ -270,6 +370,14 @@ class WorkflowService(QObject):
         self.devices_changed.emit()
 
     def disconnect_device(self, peer: str) -> None:
+        """Close one TCP device connection.
+
+        Args:
+            peer: Device address.
+
+        Raises:
+            WorkflowError: If the server is not TCP or the device is not connected.
+        """
         endpoint = self.connections.endpoint(self.server_id) if self.server_id is not None else None
         if not isinstance(endpoint, TcpServer):
             raise WorkflowError("only TCP devices can be disconnected (UDP has no connection)")
@@ -277,26 +385,42 @@ class WorkflowService(QObject):
             raise WorkflowError(f"{peer} is not connected")
 
     def forget_disconnected(self) -> None:
+        """Remove every disconnected device from the device list."""
         for peer in [p for p, d in self.devices.items() if not d.connected]:
             del self.devices[peer]
         self.devices_changed.emit()
 
-    def _resolve_name(self, peer: str) -> str:
+    def _lookup_inventory_name(self, peer: str) -> str:
+        """Find a device name in the inventory by the peer's host address.
+
+        Args:
+            peer: Device address.
+
+        Returns:
+            The name if exactly one inventory device has that host, otherwise
+            ``""``.
+        """
         host = peer.rpartition(":")[0].strip("[]")
         matches = [d for d in self.device_service.list() if d.host == host]
         return matches[0].name if len(matches) == 1 else ""
 
     def _on_peer_changed(self, peer: str, connected: bool) -> None:
+        """Track a device connecting to or disconnecting from the server.
+
+        Args:
+            peer: Device address.
+            connected: True on connect, False on disconnect.
+        """
         now = time.time()
         device = self.devices.get(peer)
         if connected:
             if device is None:
-                device = ConnectedDevice(peer, self._resolve_name(peer), True, now)
+                device = ConnectedDevice(peer, self._lookup_inventory_name(peer), True, now)
                 self.devices[peer] = device
             else:
                 device.connected, device.connected_at, device.disconnected_at = True, now, None
             if self.session_id is not None:
-                device.row_id = self.session_devices.connected(self.session_id, peer, device.name, now)
+                device.row_id = self.session_devices.record_connected(self.session_id, peer, device.name, now)
             log.info("device connected", extra={"context": {"peer": peer, "name": device.name}})
         elif device is not None:
             self._mark_disconnected(device)
@@ -306,11 +430,22 @@ class WorkflowService(QObject):
         self.devices_changed.emit()
 
     def _mark_disconnected(self, device: ConnectedDevice) -> None:
+        """Mark a device disconnected now and finalise its session row.
+
+        Args:
+            device: Device that disconnected.
+        """
         device.connected = False
         device.disconnected_at = time.time()
         self._update_device_row(device, final=True)
 
     def _update_device_row(self, device: ConnectedDevice, final: bool = False) -> None:
+        """Write a device's traffic counters to its session row.
+
+        Args:
+            device: Device to store; ignored if it has no session row.
+            final: Also set ``disconnected_at``, using now if it is unknown.
+        """
         if device.row_id is None:
             return
         values: dict[str, Any] = {
@@ -324,6 +459,11 @@ class WorkflowService(QObject):
         self.session_devices.update_row(device.row_id, **values)
 
     def _on_packet(self, packet: Packet) -> None:
+        """Add a server packet to its device's traffic counters.
+
+        Args:
+            packet: Packet from the connection manager.
+        """
         if packet.connection_id is None or packet.connection_id != self.server_id:
             return
         peer = packet.source if packet.direction is Direction.RX else packet.destination
@@ -342,9 +482,26 @@ class WorkflowService(QObject):
     # Step 4: operations
     # ------------------------------------------------------------------
     def list_operations(self) -> list[DeviceOperation]:
+        """List every stored device operation.
+
+        Returns:
+            Operations ordered by category, sort order and name.
+        """
         return self.operations.list()
 
     def save_operation(self, op: DeviceOperation) -> DeviceOperation:
+        """Validate and save an operation, keeping names unique.
+
+        Args:
+            op: Operation to save.
+
+        Returns:
+            The saved operation with ``id`` set.
+
+        Raises:
+            ValueError: If the operation is invalid.
+            WorkflowError: If another operation already has that name.
+        """
         op.validate()
         existing = self.operations.find(op.name)
         if existing is not None and existing.id != op.id:
@@ -352,10 +509,27 @@ class WorkflowService(QObject):
         return self.operations.save(op)
 
     def delete_operation(self, op_id: int) -> None:
+        """Delete an operation.
+
+        Args:
+            op_id: Operation id.
+        """
         self.operations.delete(op_id)
 
     def import_operations(self, items: list[dict[str, Any]], replace: bool = False) -> int:
-        """Import a command set (list of dicts, see DeviceOperation.from_dict)."""
+        """Import a command set, updating operations that have the same name.
+
+        Args:
+            items: Operations in the format read by ``DeviceOperation.from_dict``.
+            replace: Delete every existing operation first.
+
+        Returns:
+            The number of operations imported.
+
+        Raises:
+            KeyError: If an item lacks ``name`` or ``payload``.
+            ValueError: If an item is invalid; nothing is imported.
+        """
         ops = [DeviceOperation.from_dict(item, i) for i, item in enumerate(items)]
         with self.db.transaction():
             if replace:
@@ -368,10 +542,27 @@ class WorkflowService(QObject):
         return len(ops)
 
     def export_operations(self) -> list[dict[str, Any]]:
+        """Export every operation as a command set.
+
+        Returns:
+            Dicts in the format read by ``DeviceOperation.from_dict``.
+        """
         return [op.to_dict() for op in self.operations.list()]
 
     def run_operations(self, peers: list[str], operations: list[DeviceOperation]) -> int:
-        """Queue ``operations`` in order on each device; returns jobs queued."""
+        """Queue operations, in order, on each selected device.
+
+        Args:
+            peers: Addresses of connected devices.
+            operations: Operations to run on each device.
+
+        Returns:
+            The number of jobs queued.
+
+        Raises:
+            WorkflowError: If the server or session is not running, the
+                selection is empty, or a device is not connected.
+        """
         if self.server_id is None or not self.server_running:
             raise WorkflowError("the server is not running")
         if self.session_id is None:
@@ -391,11 +582,13 @@ class WorkflowService(QObject):
 
     # ------------------------------------------------------------------
     def _persist_config(self) -> None:
+        """Save the configuration, logging rather than raising on failure."""
         try:
             self._save_config()
         except Exception as exc:  # config is a convenience; never block the workflow
             log.warning("could not save configuration", extra={"context": {"error": str(exc)}})
 
     def shutdown(self) -> None:
+        """End the session and stop the server."""
         self.end_session()
         self.stop_server()

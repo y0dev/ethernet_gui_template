@@ -21,14 +21,34 @@ from ..hexutil import format_hex, to_ascii
 STATUSES = ("passed", "failed", "timeout", "error", "sent")
 
 
-def _ts(value: float | None, with_date: bool = True) -> str:
+def _format_local_time(value: float | None, with_date: bool = True) -> str:
+    """Format an epoch timestamp in local time.
+
+    Args:
+        value: Seconds since the Unix epoch, or None.
+        with_date: True for ``YYYY-MM-DD HH:MM:SS``, False for
+            ``HH:MM:SS.mmm``.
+
+    Returns:
+        The formatted time, or ``"-"`` for None.
+    """
     if value is None:
         return "-"
     stamp = dt.datetime.fromtimestamp(value)
     return stamp.strftime("%Y-%m-%d %H:%M:%S" if with_date else "%H:%M:%S.%f")[: None if with_date else -3]
 
 
-def _duration(start: float | None, end: float | None) -> str:
+def _format_duration(start: float | None, end: float | None) -> str:
+    """Format the time between two timestamps as ``H:MM:SS``.
+
+    Args:
+        start: Start in epoch seconds, or None.
+        end: End in epoch seconds, or None if still running.
+
+    Returns:
+        The duration, suffixed with ``(running)`` when ``end`` is None, or
+        ``"-"`` when ``start`` is None.
+    """
     if start is None:
         return "-"
     seconds = int((end or dt.datetime.now().timestamp()) - start)
@@ -37,7 +57,16 @@ def _duration(start: float | None, end: float | None) -> str:
     return f"{hours:d}:{minutes:02d}:{secs:02d}" + ("" if end else " (running)")
 
 
-def _preview(data: bytes | None, limit: int = 48) -> str:
+def _preview_bytes(data: bytes | None, limit: int = 48) -> str:
+    """Render the start of a byte string as hex followed by ASCII.
+
+    Args:
+        data: Bytes to preview, or None.
+        limit: Maximum number of bytes shown.
+
+    Returns:
+        ``"HEX …  |ascii|"``, or ``"-"`` for None.
+    """
     if data is None:
         return "-"
     raw = bytes(data)
@@ -45,7 +74,24 @@ def _preview(data: bytes | None, limit: int = 48) -> str:
     return f"{text}  |{to_ascii(raw[:limit])}|"
 
 
-def collect(db: Database, session_id: int) -> dict[str, Any]:
+def collect_session_data(db: Database, session_id: int) -> dict[str, Any]:
+    """Gather everything a session report needs from the database.
+
+    Reconnects are collapsed into one entry per peer address, and devices
+    that appear only in results are included.
+
+    Args:
+        db: Database holding the session.
+        session_id: Session id.
+
+    Returns:
+        A dict with ``session``, ``database``, ``generated_at``, ``devices``,
+        ``results``, ``counts``, ``judged``, ``pass_rate``,
+        ``per_operation``, ``traffic`` and ``warnings``.
+
+    Raises:
+        KeyError: If the session does not exist.
+    """
     session = SessionRepository(db).get(session_id)
     if session is None:
         raise KeyError(f"session {session_id} not found")
@@ -113,6 +159,14 @@ def collect(db: Database, session_id: int) -> dict[str, Any]:
 
 # -- Markdown -----------------------------------------------------------------
 def render_markdown(data: dict[str, Any]) -> str:
+    """Render collected session data as a Markdown report.
+
+    Args:
+        data: Result of :func:`collect_session_data`.
+
+    Returns:
+        The Markdown report.
+    """
     s = data["session"]
     cfg = s.get("config", {})
     c = data["counts"]
@@ -122,16 +176,16 @@ def render_markdown(data: dict[str, Any]) -> str:
     out = [
         f"# Session Report: {s['name']}",
         "",
-        f"Generated {_ts(data['generated_at'])}",
+        f"Generated {_format_local_time(data['generated_at'])}",
         "",
         "## Session",
         "",
         "| | |",
         "|---|---|",
         f"| Session | #{s['id']} |",
-        f"| Started | {_ts(s['started_at'])} |",
-        f"| Ended | {_ts(s['ended_at']) if s['ended_at'] else 'still running'} |",
-        f"| Duration | {_duration(s['started_at'], s['ended_at'])} |",
+        f"| Started | {_format_local_time(s['started_at'])} |",
+        f"| Ended | {_format_local_time(s['ended_at']) if s['ended_at'] else 'still running'} |",
+        f"| Duration | {_format_duration(s['started_at'], s['ended_at'])} |",
         f"| Server | {cfg.get('server_address', '-')} ({cfg.get('transport', '-')}) |",
         f"| Framing | `{json.dumps(cfg.get('framing', {}))}` |",
         f"| Database | `{data['database']}` |",
@@ -160,7 +214,7 @@ def render_markdown(data: dict[str, Any]) -> str:
             f"### {d['name'] or d['peer']}",
             "",
             f"* Address: {d['peer']}",
-            f"* Connected: {_ts(d['connected_at'])} → {_ts(d['disconnected_at']) if d['disconnected_at'] else 'end of session'}"
+            f"* Connected: {_format_local_time(d['connected_at'])} → {_format_local_time(d['disconnected_at']) if d['disconnected_at'] else 'end of session'}"
             + (f" ({d['connections']} connections)" if d["connections"] > 1 else ""),
             f"* Traffic: RX {d['rx_frames']} frames / {d['rx_bytes']} B, TX {d['tx_frames']} frames / {d['tx_bytes']} B",
             f"* Results: {dc['passed']} passed, {dc['failed']} failed, {dc['timeout']} timeout, {dc['error']} error, {dc['sent']} sent",
@@ -171,14 +225,14 @@ def render_markdown(data: dict[str, Any]) -> str:
             for r in d["results"]:
                 latency = "-" if r["latency_ms"] is None else f"{r['latency_ms']:.1f} ms"
                 out.append(
-                    f"| {_ts(r['executed_at'], False)} | {r['operation_name']} | {r['status'].upper()} | {latency} | "
-                    f"`{_preview(r['request'], 24)}` | `{_preview(r['response'], 24)}` | {r['message']} |"
+                    f"| {_format_local_time(r['executed_at'], False)} | {r['operation_name']} | {r['status'].upper()} | {latency} | "
+                    f"`{_preview_bytes(r['request'], 24)}` | `{_preview_bytes(r['response'], 24)}` | {r['message']} |"
                 )
             out.append("")
     if data["warnings"]:
         out += ["## Warnings and errors during the session", ""]
         for w in data["warnings"]:
-            out.append(f"* {_ts(w['timestamp'], False)} {w['level']} {w['message']}")
+            out.append(f"* {_format_local_time(w['timestamp'], False)} {w['level']} {w['message']}")
         out.append("")
     return "\n".join(out)
 
@@ -213,6 +267,17 @@ th {{ color:{dim}; font-weight:600; font-size:12px; }}
 
 
 def render_html(data: dict[str, Any]) -> str:
+    """Render collected session data as a standalone HTML page.
+
+    The page uses concrete colours, so it also renders in Qt's
+    ``QTextBrowser``. It switches to black on white when printed.
+
+    Args:
+        data: Result of :func:`collect_session_data`.
+
+    Returns:
+        The HTML document.
+    """
     e = html.escape
     s = data["session"]
     cfg = s.get("config", {})
@@ -221,21 +286,31 @@ def render_html(data: dict[str, Any]) -> str:
     rx = data["traffic"].get("RX", {"frames": 0, "bytes": 0})
     tx = data["traffic"].get("TX", {"frames": 0, "bytes": 0})
 
-    def card(value: Any, label: str, cls: str = "") -> str:
+    def stat_card(value: Any, label: str, cls: str = "") -> str:
+        """Build one summary card table cell.
+
+        Args:
+            value: Headline value.
+            label: Caption under the value.
+            cls: CSS class for the value, e.g. ``"passed"``.
+
+        Returns:
+            The ``<td>`` HTML.
+        """
         return f'<td class="card"><b class="{cls}">{e(str(value))}</b><br><span>{e(label)}</span></td>'
 
     parts = [
         f"<!doctype html><html><head><meta charset='utf-8'><title>Session Report: {e(s['name'])}</title>",
         f"<style>{_CSS}</style></head><body>",
         f"<h1>Session Report: {e(s['name'])}</h1>",
-        f"<div class='dim'>Session #{s['id']} · {_ts(s['started_at'])} → "
-        f"{_ts(s['ended_at']) if s['ended_at'] else 'still running'} · duration {_duration(s['started_at'], s['ended_at'])}"
-        f" · generated {_ts(data['generated_at'])}</div>",
+        f"<div class='dim'>Session #{s['id']} · {_format_local_time(s['started_at'])} → "
+        f"{_format_local_time(s['ended_at']) if s['ended_at'] else 'still running'} · duration {_format_duration(s['started_at'], s['ended_at'])}"
+        f" · generated {_format_local_time(data['generated_at'])}</div>",
         "<table class='cards'><tr>",
-        card(len(data["devices"]), "Devices"), card(len(data["results"]), "Operations"),
-        card(c["passed"], "Passed", "passed"), card(c["failed"], "Failed", "failed" if c["failed"] else ""),
-        card(c["timeout"], "Timeout", "timeout" if c["timeout"] else ""),
-        card(c["error"], "Error", "error" if c["error"] else ""), card(rate, "Pass rate"),
+        stat_card(len(data["devices"]), "Devices"), stat_card(len(data["results"]), "Operations"),
+        stat_card(c["passed"], "Passed", "passed"), stat_card(c["failed"], "Failed", "failed" if c["failed"] else ""),
+        stat_card(c["timeout"], "Timeout", "timeout" if c["timeout"] else ""),
+        stat_card(c["error"], "Error", "error" if c["error"] else ""), stat_card(rate, "Pass rate"),
         "</tr></table>",
         "<div class='note'>Pass means the device's reply met the operation's match rule "
         "(exact / starts with / contains / any). It is not a protocol-level validation.</div>",
@@ -259,11 +334,11 @@ def render_html(data: dict[str, Any]) -> str:
         parts.append("<p class='dim'>No devices connected during this session.</p>")
     for d in data["devices"]:
         dc = d["counts"]
-        until = _ts(d["disconnected_at"]) if d["disconnected_at"] else "end of session"
+        until = _format_local_time(d["disconnected_at"]) if d["disconnected_at"] else "end of session"
         parts += [
             f"<h3>{e(d['name'] or d['peer'])}"
             + (f" <span class='dim mono'>{e(d['peer'])}</span>" if d["name"] else "") + "</h3>",
-            f"<div class='dim'>Connected {_ts(d['connected_at'])} → {e(until)}"
+            f"<div class='dim'>Connected {_format_local_time(d['connected_at'])} → {e(until)}"
             + (f" · {d['connections']} connections" if d["connections"] > 1 else "")
             + f" · RX {d['rx_frames']} frames / {d['rx_bytes']} B · TX {d['tx_frames']} frames / {d['tx_bytes']} B"
             + f" · {dc['passed']} passed, {dc['failed']} failed, {dc['timeout']} timeout, {dc['error']} error</div>",
@@ -274,16 +349,16 @@ def render_html(data: dict[str, Any]) -> str:
             for r in d["results"]:
                 latency = "-" if r["latency_ms"] is None else f"{r['latency_ms']:.1f} ms"
                 parts.append(
-                    f"<tr><td class='mono'>{_ts(r['executed_at'], False)}</td><td>{e(r['operation_name'])}</td>"
+                    f"<tr><td class='mono'>{_format_local_time(r['executed_at'], False)}</td><td>{e(r['operation_name'])}</td>"
                     f"<td class='{r['status']}'>{r['status'].upper()}</td><td>{latency}</td>"
-                    f"<td class='mono'>{e(_preview(r['request'], 24))}</td>"
-                    f"<td class='mono'>{e(_preview(r['response'], 24))}</td><td>{e(r['message'])}</td></tr>"
+                    f"<td class='mono'>{e(_preview_bytes(r['request'], 24))}</td>"
+                    f"<td class='mono'>{e(_preview_bytes(r['response'], 24))}</td><td>{e(r['message'])}</td></tr>"
                 )
             parts.append("</table>")
     if data["warnings"]:
         parts.append("<h2>Warnings and errors during the session</h2><table>")
         for w in data["warnings"]:
-            parts.append(f"<tr><td class='mono'>{_ts(w['timestamp'], False)}</td>"
+            parts.append(f"<tr><td class='mono'>{_format_local_time(w['timestamp'], False)}</td>"
                          f"<td class='{'error' if w['level'] != 'WARNING' else 'timeout'}'>{e(w['level'])}</td>"
                          f"<td>{e(w['message'])}</td></tr>")
         parts.append("</table>")
@@ -292,13 +367,21 @@ def render_html(data: dict[str, Any]) -> str:
 
 
 def render_csv(data: dict[str, Any]) -> str:
+    """Render a session's operation results as CSV, one row per result.
+
+    Args:
+        data: Result of :func:`collect_session_data`.
+
+    Returns:
+        The CSV text with a header row.
+    """
     buffer = io.StringIO()
     writer = csv.writer(buffer)
     writer.writerow(["executed_at", "device", "peer", "operation", "match_mode", "status", "latency_ms",
                      "request_hex", "expected_hex", "response_hex", "message"])
     for r in data["results"]:
         writer.writerow([
-            _ts(r["executed_at"]), r["device_name"], r["peer"], r["operation_name"], r["match_mode"], r["status"],
+            _format_local_time(r["executed_at"]), r["device_name"], r["peer"], r["operation_name"], r["match_mode"], r["status"],
             "" if r["latency_ms"] is None else f"{r['latency_ms']:.2f}",
             format_hex(bytes(r["request"]), ""), format_hex(bytes(r["expected"]), "") if r["expected"] else "",
             format_hex(bytes(r["response"]), "") if r["response"] is not None else "", r["message"],

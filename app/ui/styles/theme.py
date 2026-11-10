@@ -31,7 +31,8 @@ PORTING_STATUS_COLORS: dict[str, str] = {}
 LOG_LEVEL_COLORS: dict[str, str] = {}
 
 
-def _rebuild_maps() -> None:
+def _rebuild_color_maps() -> None:
+    """Refill the state, porting-status and log-level colour maps from the palette."""
     STATE_COLORS.clear()
     STATE_COLORS.update({"Connected": OK, "Listening": OK, "Connecting": WARN, "Disconnected": TEXT_DIM,
                          "Error": ERROR})
@@ -44,11 +45,21 @@ def _rebuild_maps() -> None:
     LOG_LEVEL_COLORS.update({"DEBUG": TEXT_DIM, "INFO": TEXT, "WARNING": WARN, "ERROR": ERROR, "CRITICAL": ERROR})
 
 
-_rebuild_maps()
+_rebuild_color_maps()
 
 
-def configure(overrides: dict[str, str]) -> None:
-    """Apply colour overrides (``{"accent": "#ff8800"}``) before any window is built."""
+def configure_colors(overrides: dict[str, str]) -> None:
+    """Apply colour overrides from ``project.json`` and rebuild the stylesheet.
+
+    Call this before any window is built.
+
+    Args:
+        overrides: Theme key to colour, e.g. ``{"accent": "#ff8800"}``. The
+            keys are listed in ``THEME_KEYS``.
+
+    Raises:
+        ValueError: If a key is unknown or a value is not a valid colour.
+    """
     global STYLESHEET
     unknown = sorted(set(overrides) - set(THEME_KEYS))
     if unknown:
@@ -57,18 +68,30 @@ def configure(overrides: dict[str, str]) -> None:
         if not QColor(value).isValid():
             raise ValueError(f"theme.{key}: {value!r} is not a colour")
         globals()[THEME_KEYS[key]] = value
-    _rebuild_maps()
+    _rebuild_color_maps()
     STYLESHEET = build_stylesheet()
 
 
 def monospace_font(point_size: int = 10) -> QFont:
+    """Return the system's fixed-width font.
+
+    Args:
+        point_size: Font size in points.
+
+    Returns:
+        The monospace font.
+    """
     font = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
     font.setPointSize(point_size)
     return font
 
 
 def build_stylesheet() -> str:
-    """Qt stylesheet for the current colours."""
+    """Build the Qt stylesheet for the current palette.
+
+    Returns:
+        The stylesheet text.
+    """
     return f"""
 * {{ outline: 0; }}
 QWidget {{ background: {BG}; color: {TEXT}; font-size: 10pt; }}
@@ -154,6 +177,11 @@ STYLESHEET = build_stylesheet()
 
 
 def apply_theme(app: QApplication) -> None:
+    """Apply the Fusion style, palette and stylesheet to the application.
+
+    Args:
+        app: Running Qt application.
+    """
     app.setStyle("Fusion")
     palette = QPalette()
     roles = {

@@ -98,7 +98,7 @@ def test_connection_dialog_returns_enum(qtbot):
     qtbot.addWidget(dialog)
     dialog.name.setText("x")
     dialog.transport.setCurrentIndex(3)  # UDP server
-    dialog._accept()
+    dialog._validate_and_accept()
     assert dialog.config.transport is Transport.UDP_SERVER
     assert dialog.config.framing == {"type": "raw"}
 
@@ -144,14 +144,14 @@ def test_window_follows_project_profile(qtbot, tmp_path, monkeypatch):
         item = explorer.list.findItems("example.operation_pass_rate", Qt.MatchFlag.MatchExactly)[0]
         explorer.list.setCurrentItem(item)
         assert 'ctx.db.run("example.operation_pass_rate")' == explorer.python_call.text()
-        explorer.run()
+        explorer.run_query()
         assert explorer.model.headers == ["operation_name", "runs", "passed", "pass_percent"]
         explorer.editor.setPlainText("SELECT name FROM sqlite_master WHERE type = :kind")
         assert list(explorer._param_edits) == ["kind"]
         explorer._param_edits["kind"].setText("table")
-        explorer.run()
+        explorer.run_query()
         assert explorer.model.rowCount() > 10
-        win.pages_by_key["example_queries"].run()
+        win.pages_by_key["example_queries"].run_selected_query()
     finally:
         win.close()
         ctx.shutdown()

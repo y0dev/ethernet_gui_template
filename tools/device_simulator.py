@@ -29,6 +29,18 @@ import time
 
 
 def respond(line: str, device_id: str, started: float, state: dict) -> str:
+    """Answer one DEMO protocol command.
+
+    Args:
+        line: Received command line.
+        device_id: Id reported by ``ID?``.
+        started: ``time.monotonic()`` value when the device started, used for
+            ``UPTIME``.
+        state: Per-device state; ``LED`` sets it and ``RESET`` clears it.
+
+    Returns:
+        The reply line, without the newline.
+    """
     command = line.strip()
     upper = command.upper()
     if upper == "PING":
@@ -50,7 +62,18 @@ def respond(line: str, device_id: str, started: float, state: dict) -> str:
 
 
 def run_tcp_device(host: str, port: int, device_id: str, stop: threading.Event, delay_ms: int = 0) -> None:
-    """Connect, answer commands until ``stop`` is set or the server closes."""
+    """Run one simulated TCP device until stopped or disconnected.
+
+    Args:
+        host: Workbench server host.
+        port: Workbench server port.
+        device_id: Id this device reports.
+        stop: Event that ends the device when set.
+        delay_ms: Artificial delay before each reply.
+
+    Raises:
+        OSError: If the server cannot be reached.
+    """
     started = time.monotonic()
     state: dict = {}
     with socket.create_connection((host, port), timeout=5) as sock:
@@ -75,7 +98,20 @@ def run_tcp_device(host: str, port: int, device_id: str, stop: threading.Event, 
 
 
 def run_udp_device(host: str, port: int, device_id: str, stop: threading.Event) -> None:
-    """Announce with ``HELLO <id>`` then answer datagrams from the server."""
+    """Run one simulated UDP device until stopped.
+
+    The device announces itself with ``HELLO <id>`` and then answers every
+    datagram line from the server.
+
+    Args:
+        host: Workbench server host.
+        port: Workbench server port.
+        device_id: Id this device reports.
+        stop: Event that ends the device when set.
+
+    Raises:
+        OSError: If the socket cannot be used.
+    """
     started = time.monotonic()
     state: dict = {}
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
@@ -93,6 +129,7 @@ def run_udp_device(host: str, port: int, device_id: str, stop: threading.Event) 
 
 
 def main() -> None:
+    """Parse the command line and run the simulated devices until Ctrl+C."""
     parser = argparse.ArgumentParser(description="Demo devices for the Embedded Workbench session workflow")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=5000)
@@ -110,7 +147,14 @@ def main() -> None:
             target, extra = run_udp_device, ()
         else:
             target, extra = run_tcp_device, (args.delay_ms,)
-        def run(target=target, device_id=device_id, extra=extra) -> None:
+        def run_device_thread(target=target, device_id=device_id, extra=extra) -> None:
+            """Run one device and print how it ended.
+
+            Args:
+                target: Device function, TCP or UDP.
+                device_id: Id this device reports.
+                extra: Extra positional arguments for ``target``.
+            """
             try:
                 target(args.host, args.port, device_id, stop, *extra)
             except OSError as exc:
@@ -118,7 +162,7 @@ def main() -> None:
             else:
                 print(f"{device_id} disconnected")
 
-        t = threading.Thread(target=run, daemon=True)
+        t = threading.Thread(target=run_device_thread, daemon=True)
         t.start()
         threads.append(t)
         print(f"{device_id} started")

@@ -41,6 +41,11 @@ class ImportSummary:
 
 class PortingService:
     def __init__(self, db: Database) -> None:
+        """Create the service on top of the porting repositories.
+
+        Args:
+            db: Shared database.
+        """
         self.db = db
         self.projects = PortingProjectRepository(db)
         self.modules = PortingModuleRepository(db)
@@ -49,6 +54,20 @@ class PortingService:
     def create_project(
         self, name: str, c_source_root: str = "", python_target_root: str = "", description: str = ""
     ) -> int:
+        """Create a porting project.
+
+        Args:
+            name: Project name.
+            c_source_root: Folder of the original C sources.
+            python_target_root: Folder of the Python port.
+            description: Free-text description.
+
+        Returns:
+            The new project id.
+
+        Raises:
+            ValueError: If the name is blank.
+        """
         if not name.strip():
             raise ValueError("project name is required")
         return self.projects.insert_row(
@@ -57,12 +76,30 @@ class PortingService:
         )
 
     def list_projects(self) -> list[dict[str, Any]]:
+        """List every porting project.
+
+        Returns:
+            Project rows ordered by name.
+        """
         return self.projects.list_rows(order_by="name")
 
     def get_project(self, project_id: int) -> dict[str, Any] | None:
+        """Fetch one porting project.
+
+        Args:
+            project_id: Project id.
+
+        Returns:
+            The project row, or None if it does not exist.
+        """
         return self.projects.get_row(project_id)
 
     def delete_project(self, project_id: int) -> None:
+        """Delete a porting project.
+
+        Args:
+            project_id: Project id.
+        """
         self.projects.delete(project_id)
 
     # -- modules ----------------------------------------------------------
@@ -74,6 +111,21 @@ class PortingService:
         header_paths: Sequence[str] = (),
         python_module_path: str = "",
     ) -> int:
+        """Register a C source file as a module with status "Not Analyzed".
+
+        Args:
+            project_id: Project id.
+            c_source_path: Path of the C file; required for traceability.
+            name: Module name; defaults to the file stem.
+            header_paths: Headers that belong to the module.
+            python_module_path: Path of the Python replacement, if known.
+
+        Returns:
+            The new module id.
+
+        Raises:
+            ValueError: If ``c_source_path`` is blank.
+        """
         import json
 
         if not c_source_path.strip():
@@ -88,6 +140,19 @@ class PortingService:
         )
 
     def update_module(self, module_id: int, **fields: Any) -> None:
+        """Update a module's editable fields and refresh ``updated_at``.
+
+        Status changes go through :meth:`set_status` instead.
+
+        Args:
+            module_id: Module id.
+            **fields: Any of ``name``, ``python_module_path``, ``test_coverage``
+                (0-100) and ``header_paths``.
+
+        Raises:
+            KeyError: If any other field is given.
+            ValueError: If ``test_coverage`` is out of range.
+        """
         import json
 
         allowed = {"name", "python_module_path", "test_coverage", "header_paths"}
@@ -103,20 +168,52 @@ class PortingService:
         self.db.execute("UPDATE porting_modules SET updated_at = datetime('now') WHERE id = ?", (module_id,))
 
     def list_modules(self, project_id: int) -> list[dict[str, Any]]:
+        """List a project's modules.
+
+        Args:
+            project_id: Project id.
+
+        Returns:
+            Module rows ordered by C source path.
+        """
         return self.modules.list_for_project(project_id)
 
     def get_module(self, module_id: int) -> dict[str, Any] | None:
+        """Fetch one module.
+
+        Args:
+            module_id: Module id.
+
+        Returns:
+            The module row, or None if it does not exist.
+        """
         return self.modules.get(module_id)
 
     def delete_module(self, module_id: int) -> None:
+        """Delete a module.
+
+        Args:
+            module_id: Module id.
+        """
         self.modules.delete(module_id)
 
     def import_sources(self, project_id: int, root: Path) -> ImportSummary:
-        """Register every ``.c`` file under ``root`` and record its inventory.
+        """Register every ``.c`` file under a folder and record its inventory.
 
-        For each source: local includes become dependencies, matching headers
-        are attached, and every top-level symbol becomes an (unmapped) entry
-        in the function mapping table.  Statuses stay "Not Analyzed".
+        For each new source, local includes become dependencies, matching
+        headers are attached, and every top-level symbol becomes an unmapped
+        entry in the function mapping table. Statuses stay "Not Analyzed".
+        Sources that are already tracked are skipped.
+
+        Args:
+            project_id: Project id.
+            root: Folder to scan recursively.
+
+        Returns:
+            What was added, skipped and warned about.
+
+        Raises:
+            FileNotFoundError: If ``root`` is not a folder.
         """
         root = Path(root)
         if not root.is_dir():
@@ -165,6 +262,18 @@ class PortingService:
 
     # -- status -----------------------------------------------------------
     def set_status(self, module_id: int, status: PortingStatus) -> None:
+        """Change a module's status, enforcing the porting rules.
+
+        Args:
+            module_id: Module id.
+            status: New status.
+
+        Raises:
+            KeyError: If the module does not exist.
+            PortingRuleError: If "Verified" is not justified by the latest
+                verification run, or a ported status is set without a Python
+                module path.
+        """
         module = self.modules.get(module_id)
         if module is None:
             raise KeyError(f"module {module_id} not found")
@@ -181,7 +290,14 @@ class PortingService:
         )
 
     def verification_blocker(self, module_id: int) -> str:
-        """Why the module cannot be marked Verified ("" when it can)."""
+        """Explain why a module cannot be marked "Verified".
+
+        Args:
+            module_id: Module id.
+
+        Returns:
+            The reason, or ``""`` when the latest verification run allows it.
+        """
         latest = self.modules.latest_verification(module_id)
         if latest is None:
             return "no verification run has been recorded"
@@ -197,11 +313,33 @@ class PortingService:
 
     # -- notes, mappings, verification -------------------------------------
     def add_note(self, module_id: int, category: NoteCategory, body: str) -> int:
+        """Add a note to a module.
+
+        Args:
+            module_id: Module id.
+            category: Note category.
+            body: Note text; surrounding whitespace is removed.
+
+        Returns:
+            The new note id.
+
+        Raises:
+            ValueError: If the body is blank.
+        """
         if not body.strip():
             raise ValueError("note body is empty")
         return self.modules.add_note(module_id, category, body.strip())
 
     def set_mapping(self, module_id: int, c_symbol: str, python_symbol: str, c_kind: str = "function", notes: str = "") -> None:
+        """Set the Python counterpart of a C symbol.
+
+        Args:
+            module_id: Module id.
+            c_symbol: C symbol name.
+            python_symbol: Python replacement name.
+            c_kind: Kind of C symbol.
+            notes: Free-text porting notes.
+        """
         self.modules.upsert_mapping(module_id, c_symbol, python_symbol, c_kind, notes)
 
     def record_verification(
@@ -216,7 +354,28 @@ class PortingService:
         remaining_risks: str = "",
         report_path: str = "",
     ) -> int:
-        """Store results of a verification run that was actually executed."""
+        """Store the results of a verification run that was actually executed.
+
+        A "Verified" module whose new latest run no longer justifies that
+        status is moved back to "Verification Required".
+
+        Args:
+            module_id: Module id.
+            reference_kind: What the port was compared against.
+            functions_tested: Names of the functions covered.
+            passed: Number of passing checks.
+            failed: Number of failing checks.
+            binary_compatible: Whether output matched byte for byte, or None.
+            behavioral_differences: Known differences from the C code.
+            remaining_risks: Open risks.
+            report_path: Path of the detailed report.
+
+        Returns:
+            The new verification id.
+
+        Raises:
+            ValueError: If a test count is negative.
+        """
         if passed < 0 or failed < 0:
             raise ValueError("test counts cannot be negative")
         result_id = self.modules.add_verification(
@@ -233,6 +392,18 @@ class PortingService:
         return result_id
 
     def module_detail(self, module_id: int) -> dict[str, Any]:
+        """Fetch a module together with its dependencies, mappings, notes and runs.
+
+        Args:
+            module_id: Module id.
+
+        Returns:
+            The module row with ``dependencies``, ``mappings``, ``notes``,
+            ``verifications`` and the latest ``verification`` added.
+
+        Raises:
+            KeyError: If the module does not exist.
+        """
         module = self.modules.get(module_id)
         if module is None:
             raise KeyError(f"module {module_id} not found")
@@ -243,7 +414,18 @@ class PortingService:
         module["verification"] = module["verifications"][0] if module["verifications"] else None
         return module
 
-    def report(self, project_id: int) -> str:
+    def build_status_report(self, project_id: int) -> str:
+        """Render the Markdown porting status report for a project.
+
+        Args:
+            project_id: Project id.
+
+        Returns:
+            The Markdown report.
+
+        Raises:
+            KeyError: If the project does not exist.
+        """
         project = self.projects.get_row(project_id)
         if project is None:
             raise KeyError(f"project {project_id} not found")

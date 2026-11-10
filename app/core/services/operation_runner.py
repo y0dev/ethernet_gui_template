@@ -58,6 +58,13 @@ class OperationRunner(QObject):
     queue_changed = Signal(int)
 
     def __init__(self, db: Database, connections: ConnectionManager, parent: QObject | None = None) -> None:
+        """Create the runner and start listening for received packets.
+
+        Args:
+            db: Shared database for operation results.
+            connections: Used to send payloads and receive responses.
+            parent: Optional Qt parent.
+        """
         super().__init__(parent)
         self.results = OperationResultRepository(db)
         self.connections = connections
@@ -74,7 +81,18 @@ class OperationRunner(QObject):
         session_id: int,
         device_name: str = "",
     ) -> None:
-        """Queue ``operations`` (in order) for one device."""
+        """Queue operations, in order, for one device and start the first if idle.
+
+        Args:
+            connection_id: Connection the device is reached through.
+            peer: Device address, ``host:port``.
+            operations: Operations to run in order.
+            session_id: Session the results are stored under.
+            device_name: Name stored with the results; defaults to ``peer``.
+
+        Raises:
+            ValueError: If any operation is invalid; nothing is queued.
+        """
         for op in operations:
             op.validate()
         if not self.pending(connection_id):
@@ -82,11 +100,16 @@ class OperationRunner(QObject):
         queue = self._queues.setdefault((connection_id, peer), _DeviceQueue())
         for op in operations:
             queue.jobs.append(_Job(op, device_name or peer, session_id))
-        self._emit_queue()
-        self._advance((connection_id, peer))
+        self._emit_queue_size()
+        self._start_next_job((connection_id, peer))
 
     def cancel(self, connection_id: int | None = None, peer: str | None = None) -> None:
-        """Drop queued work (all devices, one connection, or one device)."""
+        """Drop queued work and fail any running operation as cancelled.
+
+        Args:
+            connection_id: Limit to one connection, or None for all.
+            peer: Limit to one device, or None for all on the connection.
+        """
         for key, queue in list(self._queues.items()):
             if connection_id is not None and key[0] != connection_id:
                 continue
@@ -94,10 +117,16 @@ class OperationRunner(QObject):
                 continue
             queue.jobs.clear()
             if queue.active is not None:
-                self._finish(key, "error", None, "cancelled")
-        self._emit_queue()
+                self._finish_active_job(key, "error", None, "cancelled")
+        self._emit_queue_size()
 
     def peer_disconnected(self, connection_id: int, peer: str) -> None:
+        """Drop a disconnected device's queue and fail its running operation.
+
+        Args:
+            connection_id: Connection the device was on.
+            peer: Device address that disconnected.
+        """
         key = (connection_id, peer)
         queue = self._queues.get(key)
         if queue is None:
@@ -105,12 +134,21 @@ class OperationRunner(QObject):
         dropped = len(queue.jobs)
         queue.jobs.clear()
         if queue.active is not None:
-            self._finish(key, "error", None, "device disconnected")
+            self._finish_active_job(key, "error", None, "device disconnected")
         if dropped:
             log.warning("queued operations dropped", extra={"context": {"peer": peer, "count": dropped}})
-        self._emit_queue()
+        self._emit_queue_size()
 
     def pending(self, connection_id: int | None = None, peer: str | None = None) -> int:
+        """Count queued and running operations.
+
+        Args:
+            connection_id: Limit to one connection, or None for all.
+            peer: Limit to one device, or None for all.
+
+        Returns:
+            The number of jobs queued or in progress.
+        """
         total = 0
         for key, queue in self._queues.items():
             if (connection_id is None or key[0] == connection_id) and (peer is None or key[1] == peer):
@@ -118,10 +156,19 @@ class OperationRunner(QObject):
         return total
 
     # -- internals --------------------------------------------------------
-    def _emit_queue(self) -> None:
+    def _emit_queue_size(self) -> None:
+        """Emit ``queue_changed`` with the total number of pending jobs."""
         self.queue_changed.emit(self.pending())
 
-    def _advance(self, key: DeviceKey) -> None:
+    def _start_next_job(self, key: DeviceKey) -> None:
+        """Send the next queued operation for a device if it is idle.
+
+        Operations that expect no response finish at once. Otherwise a timeout
+        timer is started.
+
+        Args:
+            key: Connection id and peer of the device.
+        """
         queue = self._queues.get(key)
         if queue is None or queue.active is not None or not queue.jobs:
             return
@@ -132,10 +179,10 @@ class OperationRunner(QObject):
         if not self.connections.send(connection_id, job.operation.payload, peer):
             endpoint = self.connections.endpoint(connection_id)
             reason = endpoint.last_error if endpoint else "connection is not open"
-            self._finish(key, "error", None, f"send failed: {reason}")
+            self._finish_active_job(key, "error", None, f"send failed: {reason}")
             return
         if job.operation.match_mode is MatchMode.NONE:
-            self._finish(key, "sent", None, "sent (no response expected)")
+            self._finish_active_job(key, "sent", None, "sent (no response expected)")
             return
         timer = QTimer(self)
         timer.setSingleShot(True)
@@ -144,6 +191,12 @@ class OperationRunner(QObject):
         queue.timer = timer
 
     def _on_packet(self, packet: Packet) -> None:
+        """Judge a received frame as the response to the device's running operation.
+
+        Args:
+            packet: Packet from the connection manager; only RX packets from a
+                device with an active job are used.
+        """
         if packet.direction is not Direction.RX or packet.connection_id is None:
             return
         key = (packet.connection_id, packet.source)
@@ -151,17 +204,28 @@ class OperationRunner(QObject):
         if queue is None or queue.active is None or queue.active.operation.match_mode is MatchMode.NONE:
             return
         op = queue.active.operation
-        payload = self._unwrap(packet.connection_id, packet.data)
+        payload = self._strip_framing(packet.connection_id, packet.data)
         if op.judge(payload):
-            self._finish(key, "passed", packet.data, "response matches" if op.expected else "response received")
+            self._finish_active_job(key, "passed", packet.data, "response matches" if op.expected else "response received")
         else:
-            self._finish(
+            self._finish_active_job(
                 key, "failed", packet.data,
                 f"expected {op.match_mode.label.lower()} {format_hex(op.expected or b'')}",
             )
 
-    def _unwrap(self, connection_id: int, frame: bytes) -> bytes:
-        """Judge the application payload, not the framing bytes around it."""
+    def _strip_framing(self, connection_id: int, frame: bytes) -> bytes:
+        """Remove the connection's framing so the match rule sees only the payload.
+
+        The framer is created from the connection's configuration and cached.
+        Invalid framing falls back to raw.
+
+        Args:
+            connection_id: Connection the frame came from.
+            frame: Complete received frame.
+
+        Returns:
+            The application payload.
+        """
         framer = self._framers.get(connection_id)
         if framer is None:
             config = self.connections.config(connection_id)
@@ -173,11 +237,26 @@ class OperationRunner(QObject):
         return framer.unwrap(frame)
 
     def _on_timeout(self, key: DeviceKey) -> None:
+        """Fail a device's running operation when no response arrived in time.
+
+        Args:
+            key: Connection id and peer of the device.
+        """
         queue = self._queues.get(key)
         if queue is not None and queue.active is not None:
-            self._finish(key, "timeout", None, f"no response within {queue.active.operation.timeout_ms} ms")
+            self._finish_active_job(key, "timeout", None, f"no response within {queue.active.operation.timeout_ms} ms")
 
-    def _finish(self, key: DeviceKey, status: str, response: bytes | None, message: str) -> None:
+    def _finish_active_job(self, key: DeviceKey, status: str, response: bytes | None, message: str) -> None:
+        """Complete a device's running operation, store and emit its result.
+
+        The next queued operation starts after the current signal returns.
+
+        Args:
+            key: Connection id and peer of the device.
+            status: ``passed``, ``failed``, ``timeout``, ``sent`` or ``error``.
+            response: Received frame, or None.
+            message: Human-readable result detail.
+        """
         queue = self._queues[key]
         job = queue.active
         if job is None:
@@ -204,6 +283,6 @@ class OperationRunner(QObject):
             extra={"context": {"device": job.device_name, "operation": job.operation.name, "status": status}},
         )
         self.result_ready.emit(row)
-        self._emit_queue()
+        self._emit_queue_size()
         # Next operation for this device after the current signal unwinds.
-        QTimer.singleShot(0, lambda k=key: self._advance(k))
+        QTimer.singleShot(0, lambda k=key: self._start_next_job(k))

@@ -51,6 +51,11 @@ class Crc:
     _table: list[int] = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
+        """Validate the CRC width and precompute the lookup table.
+
+        Raises:
+            ValueError: If the width is not between 8 and 64 bits.
+        """
         p = self.params
         if not 8 <= p.width <= 64:
             raise ValueError("CRC width must be between 8 and 64 bits")
@@ -58,6 +63,11 @@ class Crc:
         self._table = self._build_table()
 
     def _build_table(self) -> list[int]:
+        """Build the 256-entry lookup table for the configured polynomial.
+
+        Returns:
+            The table, in reflected form when ``refin`` is set.
+        """
         p = self.params
         table = []
         if p.refin:
@@ -77,10 +87,24 @@ class Crc:
         return table
 
     def start(self) -> int:
+        """Return the initial register state for an incremental calculation.
+
+        Returns:
+            The ``init`` value, reflected when ``refin`` is set.
+        """
         p = self.params
         return reverse_bits(p.init, p.width) if p.refin else p.init
 
     def update(self, state: int, data: Buffer) -> int:
+        """Feed more bytes into a running CRC calculation.
+
+        Args:
+            state: Register state from :meth:`start` or an earlier update.
+            data: Bytes to add.
+
+        Returns:
+            The new register state.
+        """
         table = self._table
         if self.params.refin:
             for byte in bytes(data):
@@ -93,12 +117,30 @@ class Crc:
         return state
 
     def finish(self, state: int) -> int:
+        """Turn a register state into the final CRC value.
+
+        Applies output reflection and ``xorout``.
+
+        Args:
+            state: Register state after the last :meth:`update`.
+
+        Returns:
+            The CRC value.
+        """
         p = self.params
         if p.refin != p.refout:
             state = reverse_bits(state, p.width)
         return (state ^ p.xorout) & self._mask
 
     def compute(self, data: Buffer) -> int:
+        """Compute the CRC of a complete buffer in one call.
+
+        Args:
+            data: Bytes to checksum.
+
+        Returns:
+            The CRC value.
+        """
         return self.finish(self.update(self.start(), data))
 
 
@@ -127,17 +169,38 @@ CATALOGUE: dict[str, CrcParams] = {
 
 # -- simple checksums ---------------------------------------------------------
 def sum8(data: Buffer) -> int:
-    """Modulo-256 sum of all bytes."""
+    """Compute the modulo-256 sum of all bytes.
+
+    Args:
+        data: Bytes to sum.
+
+    Returns:
+        The 8-bit sum.
+    """
     return sum(bytes(data)) & 0xFF
 
 
 def sum8_twos_complement(data: Buffer) -> int:
-    """Value that makes the modulo-256 sum of data + checksum equal zero."""
+    """Compute the checksum byte that makes the modulo-256 sum of data plus checksum zero.
+
+    Args:
+        data: Bytes to protect.
+
+    Returns:
+        The two's-complement checksum byte.
+    """
     return (-sum(bytes(data))) & 0xFF
 
 
 def xor8(data: Buffer) -> int:
-    """XOR of all bytes (LRC)."""
+    """XOR all bytes together, giving a longitudinal redundancy check (LRC).
+
+    Args:
+        data: Bytes to combine.
+
+    Returns:
+        The 8-bit XOR of all bytes.
+    """
     result = 0
     for byte in bytes(data):
         result ^= byte
@@ -145,12 +208,26 @@ def xor8(data: Buffer) -> int:
 
 
 def sum16(data: Buffer) -> int:
-    """Modulo-65536 sum of all bytes."""
+    """Compute the modulo-65536 sum of all bytes.
+
+    Args:
+        data: Bytes to sum.
+
+    Returns:
+        The 16-bit sum.
+    """
     return sum(bytes(data)) & 0xFFFF
 
 
 def fletcher16(data: Buffer) -> int:
-    """Fletcher-16 (modulo 255), returned as ``(sum2 << 8) | sum1``."""
+    """Compute the Fletcher-16 checksum (modulo 255).
+
+    Args:
+        data: Bytes to checksum.
+
+    Returns:
+        ``(sum2 << 8) | sum1``.
+    """
     sum1 = sum2 = 0
     for byte in bytes(data):
         sum1 = (sum1 + byte) % 255
@@ -159,7 +236,17 @@ def fletcher16(data: Buffer) -> int:
 
 
 def internet_checksum(data: Buffer) -> int:
-    """RFC 1071 one's-complement sum of big-endian 16-bit words."""
+    """Compute the RFC 1071 Internet checksum.
+
+    This is the one's-complement sum of big-endian 16-bit words. An odd
+    trailing byte is padded with zero.
+
+    Args:
+        data: Bytes to checksum.
+
+    Returns:
+        The 16-bit checksum.
+    """
     raw = bytes(data)
     if len(raw) % 2:
         raw += b"\x00"

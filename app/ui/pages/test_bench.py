@@ -32,6 +32,13 @@ class TestCaseDialog(QDialog):
     __test__ = False
 
     def __init__(self, ctx: AppContext, case: dict | None, parent: QWidget | None = None) -> None:
+        """Build the test case form.
+
+        Args:
+            ctx: Application context, used to list the connections.
+            case: Test case row to edit, or None for a new case.
+            parent: Optional parent widget.
+        """
         super().__init__(parent)
         self.setWindowTitle("Edit test case" if case else "New test case")
         self.case = case or {}
@@ -61,14 +68,15 @@ class TestCaseDialog(QDialog):
         form.addRow("Expected response (HEX, exact frame)", self.expected)
         form.addRow("Timeout", self.timeout)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
-        buttons.accepted.connect(self._accept)
+        buttons.accepted.connect(self._validate_and_accept)
         buttons.rejected.connect(self.reject)
         layout = QVBoxLayout(self)
         layout.addLayout(form)
         layout.addWidget(buttons)
         self.resize(520, 0)
 
-    def _accept(self) -> None:
+    def _validate_and_accept(self) -> None:
+        """Parse the hex fields into ``self.values`` and close, showing any parse error."""
         try:
             self.values = dict(
                 name=self.name.text(), description=self.description.text(),
@@ -87,6 +95,12 @@ class TestBenchPage(QWidget):
     __test__ = False
 
     def __init__(self, ctx: AppContext, parent: QWidget | None = None) -> None:
+        """Build the device-test and pytest tabs and subscribe to runner results.
+
+        Args:
+            ctx: Application context.
+            parent: Optional parent widget.
+        """
         super().__init__(parent)
         self.ctx = ctx
         self.runner = ctx.tests
@@ -97,23 +111,28 @@ class TestBenchPage(QWidget):
             "Request/response tests against live devices, and the project's automated pytest suites.",
         ))
         tabs = QTabWidget()
-        tabs.addTab(self._device_tab(), "Device tests")
-        tabs.addTab(self._suite_tab(), "Automated suites")
+        tabs.addTab(self._build_device_tests_tab(), "Device tests")
+        tabs.addTab(self._build_suite_tab(), "Automated suites")
         layout.addWidget(tabs, 1)
         self.runner.case_finished.connect(lambda *_: self.refresh_results())
-        self.runner.suite_output.connect(self._append_output)
-        self.runner.suite_finished.connect(self._suite_done)
+        self.runner.suite_output.connect(self._append_suite_output)
+        self.runner.suite_finished.connect(self._on_suite_finished)
         self.refresh_cases()
         self.refresh_results()
 
     # -- device tests -----------------------------------------------------
-    def _device_tab(self) -> QWidget:
+    def _build_device_tests_tab(self) -> QWidget:
+        """Build the device tests tab with its actions, case table and result table.
+
+        Returns:
+            The tab widget.
+        """
         page = QWidget()
         layout = QVBoxLayout(page)
         bar = QHBoxLayout()
         for text, slot, name in (("New", self.new_case, "Primary"), ("Edit", self.edit_case, ""),
-                                 ("Delete", self.delete_case, "Danger"), ("Run selected", self.run_selected, ""),
-                                 ("Run all", self.run_all, "")):
+                                 ("Delete", self.delete_case, "Danger"), ("Run selected", self.run_selected_cases, ""),
+                                 ("Run all", self.run_all_cases, "")):
             b = QPushButton(text)
             b.setObjectName(name)
             b.clicked.connect(slot)
@@ -147,6 +166,7 @@ class TestBenchPage(QWidget):
         return page
 
     def refresh_cases(self) -> None:
+        """Reload the test case table with connection names."""
         names = {c.id: c.name for c in self.ctx.connections.configs()}
         rows = self.runner.cases.list_rows(order_by="name")
         for r in rows:
@@ -154,6 +174,7 @@ class TestBenchPage(QWidget):
         self.cases_model.set_records(rows)
 
     def refresh_results(self) -> None:
+        """Reload the 500 most recent results, naming device cases."""
         names = {r["id"]: r["name"] for r in self.runner.cases.list_rows()}
         rows = self.runner.results.recent(500)
         for r in rows:
@@ -162,18 +183,30 @@ class TestBenchPage(QWidget):
         self.results_model.set_records(rows)
 
     def _selected_case(self) -> dict | None:
+        """Return the test case in the first selected row.
+
+        Returns:
+            The case row, or None if nothing is selected.
+        """
         rows = self.cases_view.selectionModel().selectedRows()
         return self.cases_model.record(rows[0].row()) if rows else None
 
     def new_case(self) -> None:
-        self._edit(None)
+        """Open the dialog for a new test case."""
+        self._open_case_dialog(None)
 
     def edit_case(self) -> None:
+        """Open the dialog for the selected test case."""
         case = self._selected_case()
         if case:
-            self._edit(case)
+            self._open_case_dialog(case)
 
-    def _edit(self, case: dict | None) -> None:
+    def _open_case_dialog(self, case: dict | None) -> None:
+        """Show the test case dialog and save the case if accepted.
+
+        Args:
+            case: Case row to edit, or None for a new case.
+        """
         dialog = TestCaseDialog(self.ctx, case, self)
         if dialog.exec():
             v = dialog.values
@@ -185,21 +218,29 @@ class TestBenchPage(QWidget):
             self.refresh_cases()
 
     def delete_case(self) -> None:
+        """Delete the selected test case."""
         case = self._selected_case()
         if case:
             self.runner.cases.delete(case["id"])
             self.refresh_cases()
 
-    def run_selected(self) -> None:
+    def run_selected_cases(self) -> None:
+        """Run every selected test case."""
         for index in self.cases_view.selectionModel().selectedRows():
             self.runner.run_case(self.cases_model.record(index.row())["id"])
 
-    def run_all(self) -> None:
+    def run_all_cases(self) -> None:
+        """Run every test case in the table."""
         for record in self.cases_model.records:
             self.runner.run_case(record["id"])
 
     # -- pytest -----------------------------------------------------------
-    def _suite_tab(self) -> QWidget:
+    def _build_suite_tab(self) -> QWidget:
+        """Build the automated suites tab with its target choice and output view.
+
+        Returns:
+            The tab widget.
+        """
         page = QWidget()
         layout = QVBoxLayout(page)
         bar = QHBoxLayout()
@@ -223,6 +264,7 @@ class TestBenchPage(QWidget):
         return page
 
     def run_suite(self) -> None:
+        """Start pytest on the chosen target, showing an error if a run is active."""
         self.output.clear()
         try:
             self.runner.run_pytest(self.suite_target.currentData())
@@ -233,11 +275,21 @@ class TestBenchPage(QWidget):
         self.suite_status.setText("Running…")
         self.suite_status.setStyleSheet("")
 
-    def _append_output(self, text: str) -> None:
+    def _append_suite_output(self, text: str) -> None:
+        """Append pytest output to the output view.
+
+        Args:
+            text: New output text.
+        """
         self.output.moveCursor(self.output.textCursor().MoveOperation.End)
         self.output.insertPlainText(text)
 
-    def _suite_done(self, summary) -> None:
+    def _on_suite_finished(self, summary) -> None:
+        """Show the suite summary, re-enable the run button and reload results.
+
+        Args:
+            summary: ``SuiteSummary`` of the finished run.
+        """
         self.run_suite_button.setEnabled(True)
         ok = summary.failed == 0 and summary.errors == 0 and summary.exit_code == 0
         self.suite_status.setText(
@@ -248,5 +300,10 @@ class TestBenchPage(QWidget):
         self.refresh_results()
 
     def showEvent(self, event) -> None:  # noqa: N802
+        """Reload the test cases whenever the page becomes visible.
+
+        Args:
+            event: Qt show event.
+        """
         super().showEvent(event)
         self.refresh_cases()

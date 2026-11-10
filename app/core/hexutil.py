@@ -8,7 +8,20 @@ _HEX_NOISE = re.compile(r"(0[xX])|[\s,:;\-]")
 
 
 def parse_hex(text: str) -> bytes:
-    """Parse user-entered hex: ``"01 02 0A"``, ``"0x01,0x02"``, ``"01020a"``."""
+    """Parse hex typed by a user into bytes.
+
+    Accepts forms such as ``"01 02 0A"``, ``"0x01,0x02"`` and ``"01020a"``.
+    Whitespace, ``0x`` prefixes and ``, : ; -`` separators are ignored.
+
+    Args:
+        text: User-entered hex string.
+
+    Returns:
+        The decoded bytes.
+
+    Raises:
+        ValueError: If the digit count is odd or a character is not hex.
+    """
     cleaned = _HEX_NOISE.sub("", text)
     if len(cleaned) % 2:
         raise ValueError("hex input has an odd number of digits")
@@ -19,7 +32,21 @@ def parse_hex(text: str) -> bytes:
 
 
 def parse_ascii(text: str) -> bytes:
-    """Encode text as bytes, honouring ``\\r \\n \\t \\0 \\\\ \\xNN`` escapes."""
+    """Encode text as bytes, honouring C-style escapes.
+
+    Supports ``\\r``, ``\\n``, ``\\t``, ``\\0``, ``\\\\`` and ``\\xNN``. Other
+    characters must be single Latin-1 bytes.
+
+    Args:
+        text: User-entered text.
+
+    Returns:
+        The encoded bytes.
+
+    Raises:
+        ValueError: If a ``\\x`` escape is malformed or a character does not fit
+            in one byte.
+    """
     out = bytearray()
     i = 0
     simple = {"n": 0x0A, "r": 0x0D, "t": 0x09, "0": 0x00, "\\": 0x5C}
@@ -50,16 +77,42 @@ def parse_ascii(text: str) -> bytes:
 
 
 def format_hex(data: bytes, separator: str = " ") -> str:
+    """Render bytes as uppercase hex.
+
+    Args:
+        data: Bytes to render.
+        separator: Text placed between bytes; empty for none.
+
+    Returns:
+        The hex string, e.g. ``"01 0A FF"``.
+    """
     return data.hex(separator).upper() if separator else data.hex().upper()
 
 
 def to_ascii(data: bytes, placeholder: str = ".") -> str:
-    """Printable ASCII rendering; everything else becomes ``placeholder``."""
+    """Render bytes as printable ASCII.
+
+    Args:
+        data: Bytes to render.
+        placeholder: Character shown for non-printable bytes.
+
+    Returns:
+        The rendered text, one character per byte.
+    """
     return "".join(chr(b) if 0x20 <= b < 0x7F else placeholder for b in data)
 
 
 def hexdump(data: bytes, width: int = 16) -> str:
-    """Classic offset / hex / ASCII dump."""
+    """Format bytes as a classic offset, hex and ASCII dump.
+
+    Args:
+        data: Bytes to dump.
+        width: Bytes per line. A width of 16 adds an extra gap after the
+            eighth byte.
+
+    Returns:
+        The dump, one line per ``width`` bytes.
+    """
     lines = []
     for offset in range(0, len(data), width):
         chunk = data[offset:offset + width]

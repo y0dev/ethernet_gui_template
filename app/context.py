@@ -45,6 +45,17 @@ class AppContext:
     @classmethod
     def create(cls, config: AppConfig, config_file: Path, parent: QObject | None = None,
                sql_dirs: list[Path] | None = None) -> AppContext:
+        """Build the database, logging and every service from configuration.
+
+        Args:
+            config: Validated runtime configuration.
+            config_file: Path the configuration is saved back to.
+            parent: Optional Qt parent that owns the services' QObjects.
+            sql_dirs: Extra folders of named-query ``.sql`` files to load.
+
+        Returns:
+            A fully wired application context.
+        """
         db = Database(config.resolve(config.database_path), sql=SqlLibrary.load(sql_dirs or []))
         version = migrate(db)
         emitter = LogEmitter(parent)
@@ -84,15 +95,22 @@ class AppContext:
         return ctx
 
     def save_config(self) -> None:
+        """Persist the current runtime configuration to ``config_file``."""
         save_config(self.config, self.config_file)
 
     def backup_database(self) -> Path:
+        """Copy the database to a timestamped file in the backup directory.
+
+        Returns:
+            Path of the backup file that was written.
+        """
         import datetime as dt
 
         stamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
         return self.db.backup(self.config.resolve(self.config.backup_dir) / f"workbench_{stamp}.db")
 
     def shutdown(self) -> None:
+        """Stop workflows and capture, close connections, logging and the database."""
         log.info("shutting down")
         self.workflow.shutdown()
         self.capture.shutdown()

@@ -21,7 +21,15 @@ from ...core.models import ConnectionConfig, Device, Transport
 from ..widgets.common import show_error
 
 
-def _port_box(value: int) -> QSpinBox:
+def _create_port_spinbox(value: int) -> QSpinBox:
+    """Create a spin box for a TCP/UDP port number.
+
+    Args:
+        value: Initial port.
+
+    Returns:
+        A spin box limited to 0-65535.
+    """
     box = QSpinBox()
     box.setRange(0, 65535)
     box.setValue(value)
@@ -30,13 +38,20 @@ def _port_box(value: int) -> QSpinBox:
 
 class DeviceDialog(QDialog):
     def __init__(self, device: Device | None, protocols: list[str], parent: QWidget | None = None) -> None:
+        """Build the device form.
+
+        Args:
+            device: Device to edit in place, or None to create a new one.
+            protocols: Decoder names offered in the protocol list.
+            parent: Optional parent widget.
+        """
         super().__init__(parent)
         self.setWindowTitle("Edit Device" if device else "Add Device")
         self.device = device or Device(name="")
         form = QFormLayout()
         self.name = QLineEdit(self.device.name)
         self.host = QLineEdit(self.device.host)
-        self.port = _port_box(self.device.port)
+        self.port = _create_port_spinbox(self.device.port)
         self.transport = QComboBox()
         for t in Transport:
             self.transport.addItem(t.label, t)
@@ -58,14 +73,15 @@ class DeviceDialog(QDialog):
         form.addRow("Description", self.description)
         form.addRow("Notes", self.notes)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
-        buttons.accepted.connect(self._accept)
+        buttons.accepted.connect(self._validate_and_accept)
         buttons.rejected.connect(self.reject)
         layout = QVBoxLayout(self)
         layout.addLayout(form)
         layout.addWidget(buttons)
         self.resize(420, 0)
 
-    def _accept(self) -> None:
+    def _validate_and_accept(self) -> None:
+        """Copy the form into ``self.device`` and close, unless the name is blank."""
         if not self.name.text().strip():
             show_error(self, "Device", "Name is required.")
             return
@@ -87,6 +103,12 @@ class FramingEditor(QWidget):
              ("fixed", "Fixed length"), ("length_prefixed", "Length prefixed")]
 
     def __init__(self, framing: dict, parent: QWidget | None = None) -> None:
+        """Build the framing type selector and one settings page per type.
+
+        Args:
+            framing: Initial framing configuration, as for ``create_framer``.
+            parent: Optional parent widget.
+        """
         super().__init__(parent)
         self.kind = QComboBox()
         for key, label in self.TYPES:
@@ -151,7 +173,12 @@ class FramingEditor(QWidget):
         layout.addWidget(self.kind)
         layout.addWidget(self.stack)
 
-    def value(self) -> dict:
+    def framing_config(self) -> dict:
+        """Return the framing configuration currently entered.
+
+        Returns:
+            A dict accepted by ``create_framer``.
+        """
         kind = self.kind.currentData()
         if kind == "delimiter":
             return {"type": kind, "delimiter_hex": self.delimiter.text().replace(" ", ""),
@@ -174,6 +201,17 @@ class ConnectionDialog(QDialog):
         defaults: tuple[int, int] = (5000, 3000),
         parent: QWidget | None = None,
     ) -> None:
+        """Build the connection form.
+
+        Args:
+            config: Configuration to edit in place, or None to create a new one.
+            devices: Devices offered for linking; choosing one fills in its
+                address.
+            protocols: Decoder names offered in the protocol list.
+            defaults: Connect timeout and reconnect interval in milliseconds for
+                a new connection.
+            parent: Optional parent widget.
+        """
         super().__init__(parent)
         self.setWindowTitle("Edit Connection" if config else "New Connection")
         self.config = config or ConnectionConfig(
@@ -188,8 +226,8 @@ class ConnectionDialog(QDialog):
             self.transport.addItem(t.label, t)
         self.transport.setCurrentIndex(list(Transport).index(c.transport))
         self.host = QLineEdit(c.host)
-        self.port = _port_box(c.port)
-        self.local_port = _port_box(c.local_port)
+        self.port = _create_port_spinbox(c.port)
+        self.local_port = _create_port_spinbox(c.local_port)
         self.device = QComboBox()
         self.device.addItem("(none)", None)
         for d in devices:
@@ -225,20 +263,21 @@ class ConnectionDialog(QDialog):
         form.addRow("", self.reconnect)
         form.addRow("Reconnect interval", self.reconnect_interval)
         self._form = form
-        self.transport.currentIndexChanged.connect(self._update_fields)
-        self.device.currentIndexChanged.connect(self._apply_device)
+        self.transport.currentIndexChanged.connect(self._update_visible_fields)
+        self.device.currentIndexChanged.connect(self._fill_from_device)
         self._devices = {d.id: d for d in devices}
-        self._update_fields()
+        self._update_visible_fields()
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
-        buttons.accepted.connect(self._accept)
+        buttons.accepted.connect(self._validate_and_accept)
         buttons.rejected.connect(self.reject)
         layout = QVBoxLayout(self)
         layout.addLayout(form)
         layout.addWidget(buttons)
         self.resize(460, 0)
 
-    def _apply_device(self) -> None:
+    def _fill_from_device(self) -> None:
+        """Fill the address, transport and protocol from the selected device."""
         device = self._devices.get(self.device.currentData())
         if device:
             self.host.setText(device.host)
@@ -248,7 +287,8 @@ class ConnectionDialog(QDialog):
             if idx >= 0:
                 self.protocol.setCurrentIndex(idx)
 
-    def _update_fields(self) -> None:
+    def _update_visible_fields(self) -> None:
+        """Show only the fields that apply to the selected transport."""
         t = Transport(self.transport.currentData())
         is_client = t in (Transport.TCP_CLIENT, Transport.UDP_CLIENT)
         is_tcp = t in (Transport.TCP_CLIENT, Transport.TCP_SERVER)
@@ -265,8 +305,9 @@ class ConnectionDialog(QDialog):
             if lbl is not None:
                 lbl.setVisible(visible)
 
-    def _accept(self) -> None:
-        framing = self.framing.value()
+    def _validate_and_accept(self) -> None:
+        """Validate the framing and name, copy the form into ``self.config`` and close."""
+        framing = self.framing.framing_config()
         try:
             create_framer(framing)
         except ValueError as exc:
