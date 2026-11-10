@@ -20,7 +20,13 @@ if str(PROJECT_ROOT) not in sys.path:
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
-def _find_compiler() -> str | None:
+def _find_c_compiler() -> str | None:
+    """Find a host C compiler.
+
+    Returns:
+        The first available of ``$CC``, ``cc``, ``gcc`` and ``clang``, or
+        None if there is none.
+    """
     for name in (os.environ.get("CC"), "cc", "gcc", "clang"):
         if name and shutil.which(name):
             return name
@@ -29,11 +35,18 @@ def _find_compiler() -> str | None:
 
 @pytest.fixture(scope="session")
 def c_reference(tmp_path_factory: pytest.TempPathFactory) -> ctypes.CDLL:
-    """The reference C harness compiled with the host compiler.
+    """Compile the reference C harness with the host compiler and load it.
 
-    Skips (never fakes a pass) when no C compiler is available.
+    The test is skipped, never faked as passing, when no C compiler is
+    available.
+
+    Args:
+        tmp_path_factory: pytest factory for the build directory.
+
+    Returns:
+        The loaded library with argument and return types set.
     """
-    compiler = _find_compiler()
+    compiler = _find_c_compiler()
     if compiler is None:
         pytest.skip("no C compiler available; C reference comparisons not run")
     out_dir = tmp_path_factory.mktemp("c_reference")
@@ -78,6 +91,14 @@ def c_reference(tmp_path_factory: pytest.TempPathFactory) -> ctypes.CDLL:
 
 @pytest.fixture
 def db(tmp_path: Path):
+    """Provide a migrated, file-backed database for one test.
+
+    Args:
+        tmp_path: pytest temporary directory.
+
+    Yields:
+        The database, closed after the test.
+    """
     from app.core.database import Database, migrate
 
     database = Database(tmp_path / "test.db")

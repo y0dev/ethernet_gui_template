@@ -14,6 +14,15 @@ from app.core.compatibility.framing import (
 
 
 def feed_bytewise(framer, data: bytes) -> list[bytes]:
+    """Feed data to a framer one byte at a time.
+
+    Args:
+        framer: Framer under test.
+        data: Stream bytes.
+
+    Returns:
+        Every frame produced.
+    """
     frames = []
     for i in range(len(data)):
         frames += framer.feed(data[i:i + 1])
@@ -21,11 +30,13 @@ def feed_bytewise(framer, data: bytes) -> list[bytes]:
 
 
 def test_raw_passthrough():
+    """Raw framing passes each chunk through and ignores empty chunks."""
     assert RawFramer().feed(b"abc") == [b"abc"]
     assert RawFramer().feed(b"") == []
 
 
 def test_delimiter_split_across_chunks():
+    """A delimiter split across chunks still yields whole frames."""
     framer = DelimiterFramer(b"\r\n")
     assert framer.feed(b"hel") == []
     assert framer.feed(b"lo\r") == []
@@ -36,6 +47,7 @@ def test_delimiter_split_across_chunks():
 
 
 def test_delimiter_overflow_resets():
+    """A frame longer than the maximum raises and clears the buffer."""
     framer = DelimiterFramer(b"\n", max_frame_length=4)
     with pytest.raises(FramingError):
         framer.feed(b"abcdef")
@@ -43,6 +55,7 @@ def test_delimiter_overflow_resets():
 
 
 def test_fixed_length():
+    """Fixed-length framing splits a byte stream and rejects wrong-size payloads."""
     framer = FixedLengthFramer(3)
     assert feed_bytewise(framer, b"abcdefg") == [b"abc", b"def"]
     assert framer.pending == 1
@@ -51,6 +64,7 @@ def test_fixed_length():
 
 
 def test_length_prefixed_basic_and_bytewise():
+    """Length-prefixed frames round-trip, including when fed byte by byte."""
     framer = LengthPrefixedFramer(2, ByteOrder.BIG)
     stream = framer.encode(b"hello") + framer.encode(b"") + framer.encode(b"xy")
     assert stream[:2] == b"\x00\x05"
@@ -60,6 +74,7 @@ def test_length_prefixed_basic_and_bytewise():
 
 
 def test_length_prefixed_offset_and_adjust():
+    """A length field after a sync byte, uncounted trailers and whole-frame lengths work."""
     # [sync:1][len:1 counting payload only][payload][crc:2 not counted] -> adjust +2
     frame = b"\xAA\x03abc\x12\x34"
     framer =LengthPrefixedFramer(1, ByteOrder.BIG, length_offset=1, length_adjust=2)
@@ -72,6 +87,7 @@ def test_length_prefixed_offset_and_adjust():
 
 
 def test_length_prefixed_rejects_bad_lengths():
+    """Oversized, undersized and unencodable lengths raise ``FramingError``."""
     with pytest.raises(FramingError):
         LengthPrefixedFramer(2, max_frame_length=10).feed(b"\x00\x20")
     with pytest.raises(FramingError):
@@ -81,6 +97,7 @@ def test_length_prefixed_rejects_bad_lengths():
 
 
 def test_create_framer():
+    """``create_framer`` builds each framer type and rejects bad configurations."""
     assert isinstance(create_framer(None), RawFramer)
     assert isinstance(create_framer({"type": "delimiter", "delimiter_hex": "0a"}), DelimiterFramer)
     lp = create_framer({"type": "length_prefixed", "length_size": 4, "byte_order": "little"})
@@ -92,6 +109,7 @@ def test_create_framer():
 
 
 def test_unwrap_inverts_encode():
+    """``unwrap`` removes exactly the framing that ``encode`` adds."""
     for framer in (RawFramer(), DelimiterFramer(b"\r\n"), LengthPrefixedFramer(2),
                    LengthPrefixedFramer(1, length_adjust=-1)):
         assert framer.unwrap(framer.encode(b"abc")) == b"abc"

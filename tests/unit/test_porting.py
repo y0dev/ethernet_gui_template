@@ -34,6 +34,7 @@ uint16_t crc16(const uint8_t *buf, size_t len)
 
 
 def test_scanner_inventory():
+    """The scanner lists includes, symbols, static functions, line numbers and calls."""
     inv = scan_source(SAMPLE, "src/crc.c")
     assert inv.includes_local == ["proto.h"]
     assert inv.includes_system == ["stdint.h"]
@@ -52,16 +53,33 @@ def test_scanner_inventory():
 
 
 def test_scanner_reports_unbalanced_braces():
+    """Unbalanced braces produce a scanner warning."""
     assert scan_source("void f(void) { if (1) {", "x.c").warnings
 
 
 @pytest.fixture
 def porting(db):
+    """Provide a porting service on the test database.
+
+    Args:
+        db: Migrated test database.
+
+    Returns:
+        The porting service.
+    """
     return PortingService(db)
 
 
 @pytest.fixture
-def c_tree(tmp_path: Path) -> Path:
+def c_source_tree(tmp_path: Path) -> Path:
+    """Create a small C source tree with a driver, its header and a main file.
+
+    Args:
+        tmp_path: pytest temporary directory.
+
+    Returns:
+        Root folder of the tree.
+    """
     root = tmp_path / "csrc"
     (root / "drivers").mkdir(parents=True)
     (root / "drivers" / "crc.c").write_text(SAMPLE)
@@ -70,9 +88,15 @@ def c_tree(tmp_path: Path) -> Path:
     return root
 
 
-def test_import_sources(porting, c_tree):
-    project = porting.create_project("fw", str(c_tree))
-    summary = porting.import_sources(project, c_tree)
+def test_import_sources(porting, c_source_tree):
+    """Importing registers each ``.c`` file once, with headers, dependencies and symbols.
+
+    Args:
+        porting: Porting service under test.
+        c_source_tree: Sample C source folder.
+    """
+    project = porting.create_project("fw", str(c_source_tree))
+    summary = porting.import_sources(project, c_source_tree)
     assert summary.added == ["drivers/crc.c", "main.c"]
     assert summary.headers_found == 1
     modules = {m["c_source_path"]: m for m in porting.list_modules(project)}
@@ -83,11 +107,17 @@ def test_import_sources(porting, c_tree):
     assert ("include", "proto.h") in deps and ("external_call", "memset") in deps
     symbols = {(m["c_kind"], m["c_symbol"]) for m in crc["mappings"]}
     assert ("function", "crc16") in symbols and ("prototype", "helper") not in symbols
-    again = porting.import_sources(project, c_tree)
+    again = porting.import_sources(project, c_source_tree)
     assert again.added == [] and len(again.already_tracked) == 2
 
 
-def test_verified_requires_real_comparison(porting, c_tree):
+def test_verified_requires_real_comparison(porting, c_source_tree):
+    """"Verified" needs a passing, binary-compatible run against the C code, and regresses on failure.
+
+    Args:
+        porting: Porting service under test.
+        c_source_tree: Sample C source folder.
+    """
     project = porting.create_project("fw")
     module = porting.add_module(project, "drivers/crc.c")
     with pytest.raises(PortingRuleError, match="no verification"):
@@ -118,6 +148,11 @@ def test_verified_requires_real_comparison(porting, c_tree):
 
 
 def test_notes_mappings_and_report(porting):
+    """Notes, mappings and verification details appear in the status report.
+
+    Args:
+        porting: Porting service under test.
+    """
     project = porting.create_project("fw", "/c", "/py")
     module = porting.add_module(project, "net/frame.c", python_module_path="core/frame.py")
     porting.set_mapping(module, "frame_encode", "encode_frame")

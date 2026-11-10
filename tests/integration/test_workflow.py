@@ -26,6 +26,15 @@ T = 5000
 
 @pytest.fixture
 def ctx(qtbot, tmp_path):
+    """Provide a full application context over temporary files.
+
+    Args:
+        qtbot: pytest-qt robot fixture.
+        tmp_path: pytest temporary directory.
+
+    Yields:
+        The context; its services are shut down and deleted afterwards.
+    """
     from PySide6.QtCore import QCoreApplication, QEvent, QObject
 
     owner = QObject()  # owns every service so they are destroyed deterministically
@@ -40,11 +49,24 @@ def ctx(qtbot, tmp_path):
 
 
 @pytest.fixture
-def devices():
+def simulated_devices():
+    """Provide a function that starts simulated TCP devices.
+
+    Yields:
+        ``start_simulated_devices(port, count, delay_ms=0)``. Every device
+        is stopped after the test.
+    """
     stop = threading.Event()
     threads: list[threading.Thread] = []
 
-    def start(port: int, count: int, delay_ms: int = 0) -> None:
+    def start_simulated_devices(port: int, count: int, delay_ms: int = 0) -> None:
+        """Start simulated devices that connect to the workflow server.
+
+        Args:
+            port: Workflow server port on 127.0.0.1.
+            count: Number of devices.
+            delay_ms: Artificial reply delay.
+        """
         for i in range(count):
             t = threading.Thread(
                 target=device_simulator.run_tcp_device,
@@ -53,13 +75,18 @@ def devices():
             t.start()
             threads.append(t)
 
-    yield start
+    yield start_simulated_devices
     stop.set()
     for t in threads:
         t.join(timeout=3)
 
 
 def _free_port() -> int:
+    """Find a local TCP port that is currently free.
+
+    Returns:
+        The port number.
+    """
     import socket
 
     with socket.socket() as s:
@@ -68,6 +95,7 @@ def _free_port() -> int:
 
 
 def test_operation_rules():
+    """Operations validate their name, payload and expected response, and match rules judge replies."""
     op = DeviceOperation("x", "PING\\n", PayloadFormat.ASCII, MatchMode.PREFIX, "PO")
     assert op.payload == b"PING\n" and op.judge(b"PONG\n") and not op.judge(b"NO")
     assert DeviceOperation("x", "01", match_mode=MatchMode.CONTAINS, expected_text="02").judge(b"\x01\x02\x03")
@@ -80,7 +108,15 @@ def test_operation_rules():
         DeviceOperation("x", "").validate()
 
 
-def test_full_workflow(qtbot, ctx, devices, tmp_path):
+def test_full_workflow(qtbot, ctx, simulated_devices, tmp_path):
+    """All five workflow steps run on real sockets, and the report reflects what happened.
+
+    Args:
+        qtbot: pytest-qt robot fixture.
+        ctx: Application context.
+        simulated_devices: Starts simulated devices.
+        tmp_path: pytest temporary directory.
+    """
     wf = ctx.workflow
     port = _free_port()
 
@@ -100,7 +136,7 @@ def test_full_workflow(qtbot, ctx, devices, tmp_path):
     assert wf.import_operations(json.loads(DEMO_SET.read_text())["operations"]) == 8
 
     # Step 3: devices connect, session starts
-    devices(port, 3)
+    simulated_devices(port, 3)
     qtbot.waitUntil(lambda: len(wf.connected_devices()) == 3, timeout=T)
     session_id = wf.start_session("bench run")
     with pytest.raises(WorkflowError):
@@ -162,12 +198,19 @@ def test_full_workflow(qtbot, ctx, devices, tmp_path):
     assert wf.database_info()["sessions"] == 0
 
 
-def test_runner_timeout_and_disconnect(qtbot, ctx, devices):
+def test_runner_timeout_and_disconnect(qtbot, ctx, simulated_devices):
+    """A slow device times out, and disconnecting it empties its operation queue.
+
+    Args:
+        qtbot: pytest-qt robot fixture.
+        ctx: Application context.
+        simulated_devices: Starts simulated devices.
+    """
     wf = ctx.workflow
     port = _free_port()
     wf.start_server("127.0.0.1", port, Transport.TCP_SERVER, LINE)
     wf.use_current_database()
-    devices(port, 1, delay_ms=600)
+    simulated_devices(port, 1, delay_ms=600)
     qtbot.waitUntil(lambda: len(wf.connected_devices()) == 1, timeout=T)
     wf.start_session("slow")
     peer = wf.connected_devices()[0].peer
@@ -184,6 +227,11 @@ def test_runner_timeout_and_disconnect(qtbot, ctx, devices):
 
 
 def test_server_port_in_use(ctx):
+    """Starting the server on a port that is already in use raises ``WorkflowError``.
+
+    Args:
+        ctx: Application context.
+    """
     import socket
 
     with socket.socket() as blocker:
@@ -195,8 +243,16 @@ def test_server_port_in_use(ctx):
     assert ctx.workflow.server_id is None
 
 
-def test_workflow_page_end_to_end(qtbot, ctx, devices, monkeypatch, tmp_path):
-    """Drive the five steps through the actual widgets."""
+def test_workflow_page_end_to_end(qtbot, ctx, simulated_devices, monkeypatch, tmp_path):
+    """The workflow page walks through all five steps with locked navigation.
+
+    Args:
+        qtbot: pytest-qt robot fixture.
+        ctx: Application context.
+        simulated_devices: Starts simulated devices.
+        monkeypatch: pytest monkeypatch fixture.
+        tmp_path: pytest temporary directory.
+    """
     from PySide6.QtWidgets import QMessageBox
 
     from app.ui.pages.workflow import WorkflowPage
@@ -217,19 +273,19 @@ def test_workflow_page_end_to_end(qtbot, ctx, devices, monkeypatch, tmp_path):
     step.port.setValue(port)
     step.framing.kind.setCurrentIndex(step.framing.kind.findData("delimiter"))
     step.framing.delimiter.setText("0a")
-    step.start()
+    step.start_server()
     assert ctx.workflow.server_running
     page.next.click()
     assert page.stack.currentIndex() == 1
 
     # 2 database
-    page.database_step._open(str(tmp_path / "campaign.db"))
+    page.database_step._open_database(str(tmp_path / "campaign.db"))
     assert ctx.db.path.name == "campaign.db"
     page.next.click()
     assert page.stack.currentIndex() == 2
 
     # 3 devices + session
-    devices(port, 2)
+    simulated_devices(port, 2)
     qtbot.waitUntil(lambda: page.devices_step.model.rowCount() == 2, timeout=T)
     assert not page.next.isEnabled()
     page.devices_step.session_name.setText("GUI run")
@@ -241,10 +297,10 @@ def test_workflow_page_end_to_end(qtbot, ctx, devices, monkeypatch, tmp_path):
     # 4 operations
     ops_step = page.operations_step
     ctx.workflow.import_operations(json.loads(DEMO_SET.read_text())["operations"])
-    ops_step.refresh_ops()
-    ops_step._check_all(__import__("PySide6.QtCore", fromlist=["Qt"]).Qt.CheckState.Checked)
+    ops_step.refresh_operations()
+    ops_step._set_all_targets_checked(__import__("PySide6.QtCore", fromlist=["Qt"]).Qt.CheckState.Checked)
     assert len(ops_step.target_peers()) == 2
-    items = [it for it in ops_step._all_items() if it.text(0) in ("Ping", "Read ID")]
+    items = [it for it in ops_step._all_operation_items() if it.text(0) in ("Ping", "Read ID")]
     for it in items:
         it.setSelected(True)
     ops_step.run_button.click()
@@ -267,6 +323,12 @@ def test_workflow_page_end_to_end(qtbot, ctx, devices, monkeypatch, tmp_path):
 
 
 def test_udp_server_workflow(qtbot, ctx):
+    """A UDP workflow server learns devices from datagrams and runs operations.
+
+    Args:
+        qtbot: pytest-qt robot fixture.
+        ctx: Application context.
+    """
     wf = ctx.workflow
     port = _free_port()
     wf.start_server("127.0.0.1", port, Transport.UDP_SERVER, {"type": "raw"})

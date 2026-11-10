@@ -26,6 +26,7 @@ DEFINITION = {
 
 
 def test_declarative_decode():
+    """A declarative definition decodes hex, enum, bit, mixed-endian, length-linked and ASCII fields."""
     decoder = DeclarativeDecoder("demo", DEFINITION)
     msg = decoder.decode(b"\xAA\x01\x00\x02\xfe\xff\x10\x20OK")
     values = {f.name: f for f in msg.fields}
@@ -40,6 +41,7 @@ def test_declarative_decode():
 
 
 def test_declarative_reports_problems_without_raising():
+    """Bad sync values, short frames and trailing bytes are reported as errors, not raised."""
     decoder = DeclarativeDecoder("demo", DEFINITION)
     bad_sync = decoder.decode(b"\x55\x01\x00\x00\x00\x00")
     assert not bad_sync.valid
@@ -61,15 +63,29 @@ def test_declarative_reports_problems_without_raising():
     ],
 )
 def test_invalid_definitions(definition):
+    """Invalid decoder definitions are rejected when the decoder is built.
+
+    Args:
+        definition: Invalid definition under test.
+    """
     with pytest.raises(DefinitionError):
         DeclarativeDecoder("bad", definition)
 
 
 def test_registry_contains_decoder_crash():
+    """An exception inside a decoder becomes a message error, and unknown names give None."""
     class Broken(ProtocolDecoder):
         name = "broken"
 
         def decode(self, frame):
+            """Always fail, to simulate a buggy decoder.
+
+            Args:
+                frame: Frame to decode (unused).
+
+            Raises:
+                RuntimeError: Always.
+            """
             raise RuntimeError("boom")
 
     registry = DecoderRegistry()
@@ -79,6 +95,11 @@ def test_registry_contains_decoder_crash():
 
 
 def test_protocol_service_persists(db):
+    """Saved definitions survive a reload, decode packets and can be deleted.
+
+    Args:
+        db: Migrated test database.
+    """
     service = ProtocolService(db)
     service.save_definition("demo", "declarative", DEFINITION)
     reloaded = ProtocolService(db)
@@ -92,6 +113,7 @@ def test_protocol_service_persists(db):
 
 
 def test_hex_helpers():
+    """The hex and ASCII parsing and formatting helpers handle user input and errors."""
     assert parse_hex("01 02 0a") == b"\x01\x02\x0a"
     assert parse_hex("0x01,0xFF:10-20") == b"\x01\xff\x10\x20"
     with pytest.raises(ValueError):
@@ -107,6 +129,11 @@ def test_hex_helpers():
 
 
 def test_config_round_trip(tmp_path):
+    """Configuration saves and reloads, and invalid files raise ``ConfigError``.
+
+    Args:
+        tmp_path: pytest temporary directory.
+    """
     path = tmp_path / "cfg.json"
     config = load_config(path)
     assert isinstance(config, AppConfig)

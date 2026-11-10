@@ -22,6 +22,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 # -- named SQL ----------------------------------------------------------------
 def test_parse_sql_file():
+    """Named queries get their descriptions, parameters, sources and read-only flags."""
     text = """
 -- header comment is fine
 -- name: a.one
@@ -46,11 +47,23 @@ DELETE FROM t WHERE id = :id
     ("-- name: a\nSELECT 'unterminated", "not a complete"),
 ])
 def test_parse_errors(text, message):
+    """Malformed query files raise ``SqlLibraryError`` with a helpful message.
+
+    Args:
+        text: Malformed file contents.
+        message: Expected part of the error message.
+    """
     with pytest.raises(SqlLibraryError, match=message):
         parse_sql_file(text, "bad.sql")
 
 
 def test_user_folder_overrides_builtin(tmp_path, caplog):
+    """A user folder overrides built-in queries with a logged warning, and missing folders are skipped.
+
+    Args:
+        tmp_path: pytest temporary directory.
+        caplog: pytest log capture fixture.
+    """
     (tmp_path / "mine.sql").write_text("-- name: logs.recent\nSELECT 42 AS answer;\n-- name: mine.q\nSELECT 1;\n")
     lib = SqlLibrary.load([tmp_path, tmp_path / "missing"])
     assert lib.get("logs.recent").sql == "SELECT 42 AS answer"
@@ -61,7 +74,13 @@ def test_user_folder_overrides_builtin(tmp_path, caplog):
 
 
 def test_every_shipped_query_runs(db):
-    """Built-in queries and the examples in sql/ are valid against the real schema."""
+    """Built-in queries and the examples in ``sql/`` are valid against the real schema.
+
+    Modifying queries run inside a transaction that is rolled back.
+
+    Args:
+        db: Migrated test database.
+    """
     db.sql = SqlLibrary.load([ROOT / "sql"])
     assert len(db.sql.names("example.")) >= 3
     for name in db.sql.names():
@@ -77,6 +96,11 @@ def test_every_shipped_query_runs(db):
 
 
 def test_run_helpers_and_read_only_connection(db):
+    """The named-query helpers work and the read-only connection refuses writes.
+
+    Args:
+        db: Migrated test database.
+    """
     db.execute("INSERT INTO devices (name, transport) VALUES ('d1', 'tcp_client')")
     assert db.run_one("stats.database_summary")["devices"] == 1
     assert db.run_scalar("stats.database_summary") == 0       # first column = sessions
@@ -89,6 +113,7 @@ def test_run_helpers_and_read_only_connection(db):
 
 # -- migrations as .sql files -------------------------------------------------
 def test_split_statements_handles_triggers_and_literals():
+    """Statement splitting keeps triggers and semicolons inside literals intact."""
     script = """
 -- comment
 CREATE TABLE a (x TEXT DEFAULT 'semi;colon');
@@ -104,6 +129,11 @@ END;
 
 
 def test_migration_files_rules(tmp_path):
+    """Migration files must be consecutive, non-empty and named ``NNNN_name.sql``.
+
+    Args:
+        tmp_path: pytest temporary directory.
+    """
     (tmp_path / "0001_first.sql").write_text("CREATE TABLE a (x);")
     (tmp_path / "0003_gap.sql").write_text("CREATE TABLE b (x);")
     with pytest.raises(MigrationError, match="consecutive"):
@@ -127,6 +157,11 @@ def test_migration_files_rules(tmp_path):
 
 
 def test_new_migration_tool(tmp_path):
+    """``tools/new_migration.py`` creates the next numbered file with a slugged name.
+
+    Args:
+        tmp_path: pytest temporary directory.
+    """
     schema = tmp_path / "app" / "core" / "database" / "schema"
     schema.mkdir(parents=True)
     for f in (ROOT / "app" / "core" / "database" / "schema").glob("*.sql"):
@@ -139,7 +174,13 @@ def test_new_migration_tool(tmp_path):
 
 # -- project profile ----------------------------------------------------------
 def test_shipped_project_json_is_valid(monkeypatch):
-    """Every page and plugin named in project.json exists (stays true as you customise it)."""
+    """Every page and plugin named in ``project.json`` exists.
+
+    This stays true as you customise the profile.
+
+    Args:
+        monkeypatch: pytest monkeypatch fixture.
+    """
     from app.ui.registry import PageRegistry
 
     monkeypatch.syspath_prepend(str(ROOT))
@@ -153,6 +194,11 @@ def test_shipped_project_json_is_valid(monkeypatch):
 
 
 def test_project_profile_rules(tmp_path):
+    """A missing profile gives the defaults, ``_`` keys are ignored and invalid profiles are rejected.
+
+    Args:
+        tmp_path: pytest temporary directory.
+    """
     assert load_project(tmp_path / "missing.json").pages is None     # defaults: every page
     path = tmp_path / "p.json"
     path.write_text(json.dumps({"_note": "ignored", "app_name": "Acme Bench", "pages": ["devices"]}))
@@ -167,6 +213,12 @@ def test_project_profile_rules(tmp_path):
 
 # -- registry -----------------------------------------------------------------
 def test_registry_selection_and_plugins(tmp_path, monkeypatch):
+    """Plugins add pages and hooks, failures are reported, and selection orders, replaces and skips pages.
+
+    Args:
+        tmp_path: pytest temporary directory.
+        monkeypatch: pytest monkeypatch fixture.
+    """
     from PySide6.QtWidgets import QWidget
 
     from app.ui.registry import BUILTIN_PAGES, PageRegistry, RegistryError
@@ -204,6 +256,7 @@ def test_registry_selection_and_plugins(tmp_path, monkeypatch):
 
 # -- theme --------------------------------------------------------------------
 def test_theme_overrides():
+    """Theme overrides change the stylesheet and colour maps and reject bad keys or colours."""
     from app.ui.styles import theme
 
     original = {key: getattr(theme, attr) for key, attr in theme.THEME_KEYS.items()}
@@ -221,6 +274,12 @@ def test_theme_overrides():
 
 # -- generated page plugin works ----------------------------------------------
 def test_new_page_tool_creates_working_plugin(qtbot, tmp_path):
+    """``tools/new_page.py`` writes a plugin, enables it in ``project.json`` and the page works.
+
+    Args:
+        qtbot: pytest-qt robot fixture.
+        tmp_path: pytest temporary directory.
+    """
     from PySide6.QtCore import QCoreApplication, QEvent, QObject
 
     from app.context import AppContext

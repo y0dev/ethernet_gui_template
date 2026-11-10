@@ -21,7 +21,18 @@ BOUNDARY = [
 ]
 
 
-def _samples(seed: int, count: int, lo: int, hi: int) -> list[int]:
+def _random_ints(seed: int, count: int, lo: int, hi: int) -> list[int]:
+    """Generate reproducible random integers.
+
+    Args:
+        seed: Random seed.
+        count: Number of values.
+        lo: Smallest value, inclusive.
+        hi: Largest value, inclusive.
+
+    Returns:
+        The values.
+    """
     rng = random.Random(seed)
     return [rng.randint(lo, hi) for _ in range(count)]
 
@@ -32,14 +43,26 @@ def _samples(seed: int, count: int, lo: int, hi: int) -> list[int]:
      (I8, "ref_to_i8"), (I16, "ref_to_i16"), (I32, "ref_to_i32")],
 )
 def test_cast_matches_c(c_reference, ctype, fn):
+    """Casting to each fixed-width type matches the C cast for boundary and random values.
+
+    Args:
+        c_reference: Compiled C reference library.
+        ctype: Python fixed-width type under test.
+        fn: Name of the matching C cast function.
+    """
     c_fn = getattr(c_reference, fn)
-    for value in BOUNDARY + _samples(1, 2000, -(2**63), 2**63 - 1):
+    for value in BOUNDARY + _random_ints(1, 2000, -(2**63), 2**63 - 1):
         assert ctype.wrap(value) == c_fn(value), f"({ctype.name}){value}"
 
 
 def test_signed_division_and_modulo_match_c(c_reference):
-    values = [-(2**31), -7, -1, 0, 1, 7, 2**31 - 1] + _samples(2, 500, -(2**31), 2**31 - 1)
-    divisors = [-7, -3, -2, -1, 1, 2, 3, 7, 2**31 - 1, -(2**31)] + _samples(3, 50, -(2**31), 2**31 - 1)
+    """Signed division and modulo truncate toward zero exactly as in C.
+
+    Args:
+        c_reference: Compiled C reference library.
+    """
+    values = [-(2**31), -7, -1, 0, 1, 7, 2**31 - 1] + _random_ints(2, 500, -(2**31), 2**31 - 1)
+    divisors = [-7, -3, -2, -1, 1, 2, 3, 7, 2**31 - 1, -(2**31)] + _random_ints(3, 50, -(2**31), 2**31 - 1)
     for a in values:
         for b in divisors:
             if b == 0 or (a == -(2**31) and b == -1):
@@ -49,7 +72,12 @@ def test_signed_division_and_modulo_match_c(c_reference):
 
 
 def test_wrapping_signed_arithmetic_matches_fwrapv(c_reference):
-    pairs = list(zip(_samples(4, 2000, -(2**31), 2**31 - 1), _samples(5, 2000, -(2**31), 2**31 - 1), strict=True))
+    """Wrapping signed add and multiply match C built with ``-fwrapv``.
+
+    Args:
+        c_reference: Compiled C reference library.
+    """
+    pairs = list(zip(_random_ints(4, 2000, -(2**31), 2**31 - 1), _random_ints(5, 2000, -(2**31), 2**31 - 1), strict=True))
     pairs += [(2**31 - 1, 1), (-(2**31), -1), (2**31 - 1, 2**31 - 1)]
     for a, b in pairs:
         assert I32.add(a, b, wrap_signed=True) == c_reference.ref_add_i32_wrap(a, b)
@@ -57,7 +85,12 @@ def test_wrapping_signed_arithmetic_matches_fwrapv(c_reference):
 
 
 def test_unsigned_arithmetic_matches_c(c_reference):
-    pairs = list(zip(_samples(6, 2000, 0, 2**32 - 1), _samples(7, 2000, 0, 2**32 - 1), strict=True))
+    """Unsigned 32- and 16-bit arithmetic and bitwise NOT match C.
+
+    Args:
+        c_reference: Compiled C reference library.
+    """
+    pairs = list(zip(_random_ints(6, 2000, 0, 2**32 - 1), _random_ints(7, 2000, 0, 2**32 - 1), strict=True))
     pairs += [(0, 1), (2**32 - 1, 1), (2**32 - 1, 2**32 - 1)]
     for a, b in pairs:
         assert U32.add(a, b) == c_reference.ref_add_u32(a, b)
@@ -69,7 +102,12 @@ def test_unsigned_arithmetic_matches_c(c_reference):
 
 
 def test_arithmetic_right_shift_matches_c(c_reference):
-    for a in [-(2**31), -1, -2, -3, -1000, 0, 1, 2**31 - 1] + _samples(8, 200, -(2**31), 2**31 - 1):
+    """Right shift of signed values is arithmetic, as on the host compiler.
+
+    Args:
+        c_reference: Compiled C reference library.
+    """
+    for a in [-(2**31), -1, -2, -3, -1000, 0, 1, 2**31 - 1] + _random_ints(8, 200, -(2**31), 2**31 - 1):
         for n in range(32):
             assert I32.shr(a, n) == c_reference.ref_shr_i32(a, n), (a, n)
 
@@ -84,6 +122,13 @@ def test_arithmetic_right_shift_matches_c(c_reference):
     ],
 )
 def test_crc_matches_bitwise_c(c_reference, params, fn):
+    """The table-driven CRC engine matches bitwise C implementations.
+
+    Args:
+        c_reference: Compiled C reference library.
+        params: CRC parameters under test.
+        fn: Name of the matching C CRC function.
+    """
     engine = crcmod.Crc(params)
     c_fn = getattr(c_reference, fn)
     rng = random.Random(9)
@@ -93,7 +138,16 @@ def test_crc_matches_bitwise_c(c_reference, params, fn):
         assert engine.compute(data) == c_fn(data, len(data)), (params.name, data.hex())
 
 
-def _layout(packed: bool, order: ByteOrder) -> StructLayout:
+def _reference_layout(packed: bool, order: ByteOrder) -> StructLayout:
+    """Build the reference struct layout used by the C harness.
+
+    Args:
+        packed: True for ``#pragma pack(1)`` layout.
+        order: Byte order of the target.
+
+    Returns:
+        The layout.
+    """
     return StructLayout(
         "ref",
         [Field("a", "uint8_t"), Field("b", "uint32_t"), Field("c", "uint16_t"),
@@ -107,8 +161,13 @@ VALUES = {"a": 0x11, "b": 0x22334455, "c": 0x6677, "d": b"\x01\x02\x03",
 
 
 def test_natural_layout_matches_compiler(c_reference):
+    """Natural alignment gives the compiler's size, offsets and bytes, padding included.
+
+    Args:
+        c_reference: Compiled C reference library.
+    """
     order = ByteOrder.LITTLE if c_reference.ref_is_little_endian() else ByteOrder.BIG
-    layout = _layout(False, order)
+    layout = _reference_layout(False, order)
     assert layout.size == c_reference.ref_natural_size()
     for index, name in enumerate("abcdef"):
         assert layout.offsets[name] == c_reference.ref_natural_offset(index), name
@@ -119,8 +178,13 @@ def test_natural_layout_matches_compiler(c_reference):
 
 
 def test_packed_layout_matches_compiler(c_reference):
+    """Packed layout gives the compiler's size and bytes.
+
+    Args:
+        c_reference: Compiled C reference library.
+    """
     order = ByteOrder.LITTLE if c_reference.ref_is_little_endian() else ByteOrder.BIG
-    layout = _layout(True, order)
+    layout = _reference_layout(True, order)
     assert layout.size == c_reference.ref_packed_size()
     buffer = ctypes.create_string_buffer(layout.size)
     c_reference.ref_fill_packed(buffer)

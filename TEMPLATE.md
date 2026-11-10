@@ -87,6 +87,36 @@ registry.on_startup(lambda ctx: ...)   # run code once services exist (e.g. star
 `plugins/example_queries.py` is a complete example; delete it and its two
 entries in `project.json` when you no longer need it.
 
+### Update a generated page
+
+`tools/new_page.py` runs once to create the starting file. After that,
+`plugins/<key>.py` is your code: edit it directly and restart the
+application (pages are not reloaded while it runs). The tool never
+overwrites an existing page.
+
+| To change | Do this |
+|---|---|
+| What the page shows or does | Edit the class in `plugins/<key>.py`. Put logic you want to test in a service or plain function, not in the widget. |
+| The navigation title | Change the second argument of `registry.add_page(...)` in `register()`. The `PageHeader(...)` title at the top of the page is separate, so update it too. |
+| Where it appears in the navigation | Move the key within `"pages"` in `project.json`. Set `"start_page"` to open it at start-up. |
+| The page key | Rename the file, then change the key in `add_page(...)`, the `"plugins.<key>"` entry and the `"pages"` entry in `project.json`. |
+| Hide it without deleting it | Remove `"plugins.<key>"` from `"plugins"`. Removing it from `"pages"` alone is not enough: plugin pages that are not listed are added at the end automatically. |
+| Remove it | Delete `plugins/<key>.py` and both of its `project.json` entries. |
+| Start again from the latest template | Move your file aside (for example to `<key>_old.py`), run `python tools/new_page.py <key> "<Title>"` again, then copy your code across. Re-running does not duplicate the `project.json` entries. |
+
+Use `--no-enable` to create the file without touching `project.json`, and
+add the two entries yourself when the page is ready.
+
+After any of these changes, check the result:
+
+```bash
+python -m pytest tests/unit/test_template.py::test_shipped_project_json_is_valid   # project.json names real pages and plugins
+python main.py --smoke-test                                                          # every page opens
+```
+
+New functions should keep the Google-style docstrings that the generated
+file starts with (summary line, then `Args:` / `Returns:` / `Raises:`).
+
 ## 4. Define SQL once, use it anywhere
 
 Put queries in any `.sql` file in `sql/` (folders are listed in

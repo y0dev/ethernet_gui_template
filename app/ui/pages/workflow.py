@@ -67,6 +67,11 @@ RESULT_COLORS = {"passed": theme.OK, "failed": theme.ERROR, "error": theme.ERROR
 
 
 def local_ipv4_addresses() -> list[str]:
+    """List this computer's non-loopback IPv4 addresses.
+
+    Returns:
+        The addresses, sorted and without duplicates.
+    """
     addresses = []
     for address in QNetworkInterface.allAddresses():
         if address.protocol() == QAbstractSocket.NetworkLayerProtocol.IPv4Protocol and not address.isLoopback():
@@ -74,7 +79,15 @@ def local_ipv4_addresses() -> list[str]:
     return sorted(set(addresses))
 
 
-def _hint(text: str) -> QLabel:
+def _hint_label(text: str) -> QLabel:
+    """Create a dimmed, word-wrapped explanatory label.
+
+    Args:
+        text: Hint text.
+
+    Returns:
+        The label.
+    """
     label = QLabel(text)
     label.setObjectName("Dim")
     label.setWordWrap(True)
@@ -86,12 +99,20 @@ def _hint(text: str) -> QLabel:
 # =============================================================================
 class ServerStep(QWidget):
     def __init__(self, ctx: AppContext, parent: QWidget | None = None) -> None:
+        """Build the server form, start/stop buttons and connection hint.
+
+        The form is pre-filled with the last server settings.
+
+        Args:
+            ctx: Application context.
+            parent: Optional parent widget.
+        """
         super().__init__(parent)
         self.ctx = ctx
         self.wf = ctx.workflow
         cfg = ctx.config
         layout = QVBoxLayout(self)
-        layout.addWidget(_hint("Open a server that your devices connect to. The address and port are "
+        layout.addWidget(_hint_label("Open a server that your devices connect to. The address and port are "
                                "remembered for next time."))
         box = QGroupBox("Server configuration")
         form = QFormLayout(box)
@@ -115,7 +136,7 @@ class ServerStep(QWidget):
         form.addRow("Bind IP address", self.host)
         form.addRow("Port", self.port)
         form.addRow("Message framing (TCP)", self.framing)
-        form.addRow("", _hint("0.0.0.0 accepts devices on every network interface; 127.0.0.1 only on this "
+        form.addRow("", _hint_label("0.0.0.0 accepts devices on every network interface; 127.0.0.1 only on this "
                               "computer. Framing says where one message ends in the TCP stream "
                               "(e.g. Delimiter 0a for newline-terminated messages)."))
         layout.addWidget(box)
@@ -123,9 +144,9 @@ class ServerStep(QWidget):
         row = QHBoxLayout()
         self.start_button = QPushButton("Start server")
         self.start_button.setObjectName("Primary")
-        self.start_button.clicked.connect(self.start)
+        self.start_button.clicked.connect(self.start_server)
         self.stop_button = QPushButton("Stop server")
-        self.stop_button.clicked.connect(self.stop)
+        self.stop_button.clicked.connect(self.stop_server)
         self.state = StatusDot()
         row.addWidget(self.start_button)
         row.addWidget(self.stop_button)
@@ -139,15 +160,20 @@ class ServerStep(QWidget):
         layout.addWidget(self.connect_hint)
         layout.addStretch(1)
 
-        self.transport.currentIndexChanged.connect(self._transport_changed)
+        self.transport.currentIndexChanged.connect(self._on_transport_changed)
         self.wf.server_state_changed.connect(lambda _s: self.refresh())
-        self._transport_changed()
+        self._on_transport_changed()
         self.refresh()
 
-    def _transport_changed(self) -> None:
+    def _on_transport_changed(self) -> None:
+        """Enable the framing editor only for a TCP server."""
         self.framing.setEnabled(self.transport.currentData() == Transport.TCP_SERVER.value)
 
-    def start(self) -> None:
+    def start_server(self) -> None:
+        """Start or restart the workflow server with the entered settings.
+
+        Errors are shown in a dialog.
+        """
         host = self.host.currentText().strip() or "0.0.0.0"
         try:
             self.wf.start_server(host, self.port.value(), Transport(self.transport.currentData()),
@@ -156,7 +182,8 @@ class ServerStep(QWidget):
             show_error(self, "Start server", exc)
         self.refresh()
 
-    def stop(self) -> None:
+    def stop_server(self) -> None:
+        """Stop the workflow server, asking first if a session is recording."""
         if self.wf.session_id is not None and QMessageBox.question(
             self, "Stop server", "A session is recording. Stop the server anyway? Devices will be disconnected."
         ) != QMessageBox.StandardButton.Yes:
@@ -165,6 +192,7 @@ class ServerStep(QWidget):
         self.refresh()
 
     def refresh(self) -> None:
+        """Update the state, buttons and the address devices should connect to."""
         running = self.wf.server_running
         self.state.set_state(self.wf.server_state.value)
         self.start_button.setText("Restart server" if running else "Start server")
@@ -188,11 +216,17 @@ class ServerStep(QWidget):
 # =============================================================================
 class DatabaseStep(QWidget):
     def __init__(self, ctx: AppContext, parent: QWidget | None = None) -> None:
+        """Build the database summary, the open/create actions and the recent list.
+
+        Args:
+            ctx: Application context.
+            parent: Optional parent widget.
+        """
         super().__init__(parent)
         self.ctx = ctx
         self.wf = ctx.workflow
         layout = QVBoxLayout(self)
-        layout.addWidget(_hint("Choose where this session is stored. Use the current database, open an "
+        layout.addWidget(_hint_label("Choose where this session is stored. Use the current database, open an "
                                "existing one or create a new file (for example one per test campaign)."))
         box = QGroupBox("Selected database")
         grid = QGridLayout(box)
@@ -211,7 +245,7 @@ class DatabaseStep(QWidget):
         row = QHBoxLayout()
         use = QPushButton("Use this database")
         use.setObjectName("Primary")
-        use.clicked.connect(self.use_current)
+        use.clicked.connect(self.use_current_database)
         open_button = QPushButton("Open existing…")
         open_button.clicked.connect(self.open_existing)
         new_button = QPushButton("Create new…")
@@ -228,14 +262,15 @@ class DatabaseStep(QWidget):
 
         layout.addWidget(section_label("Recent databases"))
         self.recent = QListWidget()
-        self.recent.itemDoubleClicked.connect(lambda item: self._open(item.text()))
+        self.recent.itemDoubleClicked.connect(lambda item: self._open_database(item.text()))
         layout.addWidget(self.recent, 1)
-        layout.addWidget(_hint("Double-click a recent database to open it."))
+        layout.addWidget(_hint_label("Double-click a recent database to open it."))
         self.wf.database_changed.connect(lambda _p: self.refresh())
         self.wf.session_changed.connect(lambda _s: self.refresh())
         self.refresh()
 
     def refresh(self) -> None:
+        """Show the current database summary, the recent databases and the step status."""
         info = self.wf.database_info()
         for key, label in self.labels.items():
             label.setText(str(info[key]))
@@ -256,7 +291,8 @@ class DatabaseStep(QWidget):
             self.status.setText("Confirm a database to continue.")
             self.status.setStyleSheet("")
 
-    def use_current(self) -> None:
+    def use_current_database(self) -> None:
+        """Confirm the current database, optionally making it the start-up default."""
         self.wf.use_current_database()
         if self.make_default.isChecked():
             self.ctx.config.database_path = str(self.ctx.db.path)
@@ -264,21 +300,31 @@ class DatabaseStep(QWidget):
         self.refresh()
 
     def open_existing(self) -> None:
+        """Ask for an existing database file and switch to it."""
         path, _ = QFileDialog.getOpenFileName(self, "Open database", str(self.ctx.db.path.parent),
                                               "SQLite database (*.db *.sqlite *.sqlite3)")
         if path:
-            self._open(path)
+            self._open_database(path)
 
     def create_new(self) -> None:
+        """Ask for a new database file name, then create and switch to it.
+
+        A ``.db`` extension is added when missing.
+        """
         stamp = time.strftime("%Y%m%d_%H%M")
         path, _ = QFileDialog.getSaveFileName(self, "Create database", str(self.ctx.db.path.parent / f"session_{stamp}.db"),
                                               "SQLite database (*.db)")
         if path:
             if not path.lower().endswith((".db", ".sqlite", ".sqlite3")):
                 path += ".db"
-            self._open(path)
+            self._open_database(path)
 
-    def _open(self, path: str) -> None:
+    def _open_database(self, path: str) -> None:
+        """Switch the workflow to a database file, showing any error.
+
+        Args:
+            path: Database file to open or create.
+        """
         try:
             self.wf.open_database(path, make_default=self.make_default.isChecked())
         except (WorkflowError, OSError) as exc:
@@ -291,6 +337,15 @@ class DatabaseStep(QWidget):
 # =============================================================================
 class DevicesStep(QWidget):
     def __init__(self, ctx: AppContext, page: WorkflowPage, parent: QWidget | None = None) -> None:
+        """Build the session bar and the connected devices table.
+
+        The table refreshes on workflow signals and every second while visible.
+
+        Args:
+            ctx: Application context.
+            page: Workflow page, used to move to the operations step.
+            parent: Optional parent widget.
+        """
         super().__init__(parent)
         self.ctx = ctx
         self.wf = ctx.workflow
@@ -308,13 +363,13 @@ class DevicesStep(QWidget):
         srow.addWidget(self.start_button)
         srow.addWidget(self.session_status)
         layout.addWidget(session)
-        layout.addWidget(_hint("Everything sent and received is recorded while the session runs. "
+        layout.addWidget(_hint_label("Everything sent and received is recorded while the session runs. "
                                "Right-click a device for its operations menu."))
 
         bar = QHBoxLayout()
         bar.addWidget(section_label("Connected devices"))
         bar.addStretch(1)
-        for text, slot in (("Name device…", self.rename), ("Disconnect", self.disconnect),
+        for text, slot in (("Name device…", self.rename_selected), ("Disconnect", self.disconnect_selected),
                            ("Clear disconnected", self.wf.forget_disconnected)):
             b = QPushButton(text)
             b.clicked.connect(slot)
@@ -332,10 +387,10 @@ class DevicesStep(QWidget):
         configure_table(self.view)
         self.view.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.view.customContextMenuRequested.connect(self._context_menu)
-        self.view.doubleClicked.connect(lambda _i: self._go_operations())
+        self.view.customContextMenuRequested.connect(self._show_context_menu)
+        self.view.doubleClicked.connect(lambda _i: self._open_operations_for_selected())
         layout.addWidget(self.view, 1)
-        self.waiting = _hint("")
+        self.waiting = _hint_label("")
         layout.addWidget(self.waiting)
 
         self.wf.devices_changed.connect(self.refresh)
@@ -348,10 +403,16 @@ class DevicesStep(QWidget):
         self.refresh()
 
     def selected_peers(self) -> list[str]:
+        """Return the addresses of the selected devices.
+
+        Returns:
+            Peer addresses in table order.
+        """
         rows = sorted({i.row() for i in self.view.selectionModel().selectedRows()})
         return [self.model.record(r)["peer"] for r in rows if self.model.record(r)]
 
     def refresh(self) -> None:
+        """Rebuild the device table, keeping the selection, and update the session status."""
         selected = set(self.selected_peers())
         rows = []
         sid = self.wf.server_id
@@ -387,6 +448,7 @@ class DevicesStep(QWidget):
             self.waiting.setText(f"{connected} device(s) connected.")
 
     def start_session(self) -> None:
+        """Start recording a session with the entered name and refresh the stepper."""
         try:
             self.wf.start_session(self.session_name.text().strip())
         except WorkflowError as exc:
@@ -394,7 +456,8 @@ class DevicesStep(QWidget):
         self.refresh()
         self.page.update_steps()
 
-    def rename(self) -> None:
+    def rename_selected(self) -> None:
+        """Ask for a name for the selected device and optionally save it to the inventory."""
         peers = self.selected_peers()
         if len(peers) != 1:
             show_error(self, "Name device", "Select one device.")
@@ -412,7 +475,8 @@ class DevicesStep(QWidget):
         except Exception as exc:
             show_error(self, "Name device", exc)
 
-    def disconnect(self) -> None:
+    def disconnect_selected(self) -> None:
+        """Disconnect every selected device, stopping at the first error."""
         for peer in self.selected_peers():
             try:
                 self.wf.disconnect_device(peer)
@@ -420,11 +484,17 @@ class DevicesStep(QWidget):
                 show_error(self, "Disconnect", exc)
                 return
 
-    def _go_operations(self) -> None:
+    def _open_operations_for_selected(self) -> None:
+        """Open the operations step with the selected devices as targets."""
         self.page.operations_step.set_targets(self.selected_peers())
         self.page.go_to(3)
 
-    def _context_menu(self, pos) -> None:
+    def _show_context_menu(self, pos) -> None:
+        """Show the device context menu with every operation grouped by category.
+
+        Args:
+            pos: Click position in viewport coordinates.
+        """
         index = self.view.indexAt(pos)
         if not index.isValid():
             return
@@ -448,13 +518,13 @@ class DevicesStep(QWidget):
                 categories[op.category] = sub
             action = QAction(op.name, sub)
             action.setToolTip(op.description)
-            action.triggered.connect(lambda _c=False, o=op: self.page.operations_step.run(connected, [o]))
+            action.triggered.connect(lambda _c=False, o=op: self.page.operations_step.run_operations(connected, [o]))
             sub.addAction(action)
         ops_menu.setEnabled(bool(connected) and self.wf.session_id is not None)
-        menu.addAction("Open operations panel…", self._go_operations)
+        menu.addAction("Open operations panel…", self._open_operations_for_selected)
         menu.addSeparator()
-        menu.addAction("Name device…", self.rename)
-        menu.addAction("Disconnect", self.disconnect)
+        menu.addAction("Name device…", self.rename_selected)
+        menu.addAction("Disconnect", self.disconnect_selected)
         menu.exec(self.view.viewport().mapToGlobal(pos))
 
 
@@ -463,6 +533,13 @@ class DevicesStep(QWidget):
 # =============================================================================
 class OperationDialog(QDialog):
     def __init__(self, op: DeviceOperation | None, categories: list[str], parent: QWidget | None = None) -> None:
+        """Build the operation form with a live preview of the bytes to send.
+
+        Args:
+            op: Operation to edit, or None for a new one.
+            categories: Existing menu categories offered in the category list.
+            parent: Optional parent widget.
+        """
         super().__init__(parent)
         self.setWindowTitle("Edit operation" if op else "New operation")
         self.op = op or DeviceOperation(name="", payload_text="")
@@ -503,12 +580,12 @@ class OperationDialog(QDialog):
         form.addRow("Expected response", self.expected)
         form.addRow("Timeout", self.timeout)
         form.addRow("", self.preview)
-        form.addRow("", _hint("Enter the message itself. The server's framing is added when sending "
+        form.addRow("", _hint_label("Enter the message itself. The server's framing is added when sending "
                               "(e.g. the delimiter) and removed from the reply before it is compared."))
         for signal in (self.payload.textChanged, self.expected.textChanged):
-            signal.connect(self._update)
-        self.format.currentIndexChanged.connect(self._update)
-        self.match.currentIndexChanged.connect(self._update)
+            signal.connect(self._update_preview)
+        self.format.currentIndexChanged.connect(self._update_preview)
+        self.match.currentIndexChanged.connect(self._update_preview)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(self._validate_and_accept)
         buttons.rejected.connect(self.reject)
@@ -516,9 +593,14 @@ class OperationDialog(QDialog):
         layout.addLayout(form)
         layout.addWidget(buttons)
         self.resize(560, 0)
-        self._update()
+        self._update_preview()
 
-    def _build(self) -> DeviceOperation:
+    def _operation_from_form(self) -> DeviceOperation:
+        """Create an operation from the form values.
+
+        Returns:
+            The operation, which keeps the original id and sort order.
+        """
         return DeviceOperation(
             id=self.op.id, name=self.name.text().strip(), category=self.category.currentText().strip() or "General",
             description=self.description.text().strip(), payload_format=PayloadFormat(self.format.currentData()),
@@ -526,11 +608,12 @@ class OperationDialog(QDialog):
             expected_text=self.expected.toPlainText(), timeout_ms=self.timeout.value(), sort_order=self.op.sort_order,
         )
 
-    def _update(self) -> None:
+    def _update_preview(self) -> None:
+        """Enable the expected field for the chosen rule and show the byte preview or parse error."""
         mode = MatchMode(self.match.currentData())
         self.expected.setEnabled(mode not in (MatchMode.NONE, MatchMode.ANY))
         try:
-            op = self._build()
+            op = self._operation_from_form()
             text = f"send {len(op.payload)} B: {format_hex(op.payload[:24])}"
             if op.expected:
                 text += f"\nexpect: {format_hex(op.expected[:24])}"
@@ -541,8 +624,12 @@ class OperationDialog(QDialog):
             self.preview.setStyleSheet(f"color: {theme.ERROR};")
 
     def _validate_and_accept(self) -> None:
+        """Validate the form, store the result in ``self.op`` and close.
+
+        Validation errors are shown in a dialog instead.
+        """
         try:
-            op = self._build()
+            op = self._operation_from_form()
             op.validate()
         except ValueError as exc:
             show_error(self, "Operation", exc)
@@ -553,6 +640,12 @@ class OperationDialog(QDialog):
 
 class OperationsStep(QWidget):
     def __init__(self, ctx: AppContext, parent: QWidget | None = None) -> None:
+        """Build the target list, operations menu, custom message bar and results table.
+
+        Args:
+            ctx: Application context.
+            parent: Optional parent widget.
+        """
         super().__init__(parent)
         self.ctx = ctx
         self.wf = ctx.workflow
@@ -570,7 +663,7 @@ class OperationsStep(QWidget):
         trow = QHBoxLayout()
         for text, state in (("All", Qt.CheckState.Checked), ("None", Qt.CheckState.Unchecked)):
             b = QPushButton(text)
-            b.clicked.connect(lambda _c=False, s=state: self._check_all(s))
+            b.clicked.connect(lambda _c=False, s=state: self._set_all_targets_checked(s))
             trow.addWidget(b)
         tv.addLayout(trow)
         top.addWidget(targets)
@@ -582,8 +675,8 @@ class OperationsStep(QWidget):
         mbar = QHBoxLayout()
         mbar.addWidget(section_label("Operations menu"))
         mbar.addStretch(1)
-        for text, slot in (("New", self.new_op), ("Edit", self.edit_op), ("Delete", self.delete_op),
-                           ("Import…", self.import_ops), ("Export…", self.export_ops)):
+        for text, slot in (("New", self.new_operation), ("Edit", self.edit_selected_operation), ("Delete", self.delete_selected_operations),
+                           ("Import…", self.import_command_set), ("Export…", self.export_command_set)):
             b = QPushButton(text)
             b.clicked.connect(slot)
             mbar.addWidget(b)
@@ -591,17 +684,17 @@ class OperationsStep(QWidget):
         self.tree = QTreeWidget()
         self.tree.setHeaderLabels(["Operation", "Sends", "Response rule", "Timeout"])
         self.tree.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
-        self.tree.itemDoubleClicked.connect(lambda item, _c: self._run_items([item]))
+        self.tree.itemDoubleClicked.connect(lambda item, _c: self._run_items_on_targets([item]))
         mv.addWidget(self.tree, 1)
-        self.op_detail = _hint("Select operations, then run them. Several selected operations run in order "
+        self.op_detail = _hint_label("Select operations, then run them. Several selected operations run in order "
                                "on every target device. Double-click runs one immediately.")
         mv.addWidget(self.op_detail)
         rrow = QHBoxLayout()
         self.run_button = QPushButton("▶ Run selected")
         self.run_button.setObjectName("Primary")
-        self.run_button.clicked.connect(lambda: self._run_items(self.tree.selectedItems()))
+        self.run_button.clicked.connect(lambda: self._run_items_on_targets(self.tree.selectedItems()))
         run_all = QPushButton("Run all in order")
-        run_all.clicked.connect(self.run_all)
+        run_all.clicked.connect(self.run_all_operations)
         self.pending = QLabel("")
         cancel = QPushButton("Cancel queued")
         cancel.clicked.connect(lambda: self.wf.server_id is not None and self.ctx.operations.cancel(self.wf.server_id))
@@ -647,18 +740,22 @@ class OperationsStep(QWidget):
             self.results_view.setColumnWidth(col, width)
         layout.addWidget(self.results_view, 2)
 
-        self.tree.itemSelectionChanged.connect(self._show_detail)
-        ctx.operations.result_ready.connect(self._on_result)
-        ctx.operations.queue_changed.connect(self._on_queue)
+        self.tree.itemSelectionChanged.connect(self._show_operation_detail)
+        ctx.operations.result_ready.connect(self._append_result)
+        ctx.operations.queue_changed.connect(self._show_queue_size)
         self.wf.devices_changed.connect(self.refresh_targets)
         self.wf.session_changed.connect(lambda _s: self.reload_results())
-        self.wf.database_changed.connect(lambda _p: (self.refresh_ops(), self.reload_results()))
+        self.wf.database_changed.connect(lambda _p: (self.refresh_operations(), self.reload_results()))
         self._checked: set[str] = set()
-        self.refresh_ops()
+        self.refresh_operations()
         self.refresh_targets()
 
     # -- targets ----------------------------------------------------------
     def refresh_targets(self) -> None:
+        """Refill the target list with the connected devices, keeping their checks.
+
+        A single connected device is checked automatically.
+        """
         if self.targets.count():
             self._checked = set(self.target_peers())
         self.targets.blockSignals(True)
@@ -674,20 +771,39 @@ class OperationsStep(QWidget):
             self.targets.item(0).setCheckState(Qt.CheckState.Checked)
 
     def set_targets(self, peers: list[str]) -> None:
+        """Check exactly the given devices in the target list.
+
+        Args:
+            peers: Device addresses to check.
+        """
         self._checked = set(peers)
         self.targets.clear()
         self.refresh_targets()
 
     def target_peers(self) -> list[str]:
+        """Return the checked target devices.
+
+        Returns:
+            Peer addresses of the checked devices.
+        """
         return [self.targets.item(i).data(Qt.ItemDataRole.UserRole) for i in range(self.targets.count())
                 if self.targets.item(i).checkState() == Qt.CheckState.Checked]
 
-    def _check_all(self, state: Qt.CheckState) -> None:
+    def _set_all_targets_checked(self, state: Qt.CheckState) -> None:
+        """Check or uncheck every target device.
+
+        Args:
+            state: Check state applied to every item.
+        """
         for i in range(self.targets.count()):
             self.targets.item(i).setCheckState(state)
 
     # -- operations menu --------------------------------------------------
-    def refresh_ops(self) -> None:
+    def refresh_operations(self) -> None:
+        """Rebuild the operations tree, grouped by category.
+
+        A hint is shown when no operations exist.
+        """
         self.tree.clear()
         groups: dict[str, QTreeWidgetItem] = {}
         for op in self.wf.list_operations():
@@ -713,9 +829,17 @@ class OperationsStep(QWidget):
                                                "(resources/command_sets/demo_simulator.json for the simulator)"])
             hint.setFlags(Qt.ItemFlag.NoItemFlags)
 
-    def _ops_for(self, items: list[QTreeWidgetItem]) -> list[DeviceOperation]:
+    def _operations_for_items(self, items: list[QTreeWidgetItem]) -> list[DeviceOperation]:
+        """Look up the operations behind tree items, in menu order.
+
+        Args:
+            items: Selected tree items; category rows are ignored.
+
+        Returns:
+            The operations, ordered as they appear in the menu.
+        """
         ops = []
-        order = {id(it): i for i, it in enumerate(self._all_items())}
+        order = {id(it): i for i, it in enumerate(self._all_operation_items())}
         for item in sorted(items, key=lambda it: order.get(id(it), 0)):
             op_id = item.data(0, Qt.ItemDataRole.UserRole)
             op = self.wf.operations.get(op_id) if op_id is not None else None
@@ -723,15 +847,21 @@ class OperationsStep(QWidget):
                 ops.append(op)
         return ops
 
-    def _all_items(self) -> list[QTreeWidgetItem]:
+    def _all_operation_items(self) -> list[QTreeWidgetItem]:
+        """List every operation item in the tree, in display order.
+
+        Returns:
+            The operation items, without the category rows.
+        """
         items = []
         for i in range(self.tree.topLevelItemCount()):
             group = self.tree.topLevelItem(i)
             items.extend(group.child(j) for j in range(group.childCount()))
         return items
 
-    def _show_detail(self) -> None:
-        ops = self._ops_for(self.tree.selectedItems())
+    def _show_operation_detail(self) -> None:
+        """Describe the selected operation, or the run order of several."""
+        ops = self._operations_for_items(self.tree.selectedItems())
         if not ops:
             return
         if len(ops) == 1:
@@ -742,19 +872,35 @@ class OperationsStep(QWidget):
         else:
             self.op_detail.setText("Runs in this order on each device: " + " → ".join(o.name for o in ops))
 
-    def _run_items(self, items: list[QTreeWidgetItem]) -> None:
-        self.run(self.target_peers(), self._ops_for(items))
+    def _run_items_on_targets(self, items: list[QTreeWidgetItem]) -> None:
+        """Run the operations behind tree items on the checked target devices.
 
-    def run(self, peers: list[str], ops: list[DeviceOperation]) -> None:
+        Args:
+            items: Selected tree items.
+        """
+        self.run_operations(self.target_peers(), self._operations_for_items(items))
+
+    def run_operations(self, peers: list[str], ops: list[DeviceOperation]) -> None:
+        """Queue operations on devices, showing any error in a dialog.
+
+        Args:
+            peers: Device addresses to run on.
+            ops: Operations to run in order on each device.
+        """
         try:
             self.wf.run_operations(peers, ops)
         except (WorkflowError, ValueError) as exc:
             show_error(self, "Run operations", exc)
 
-    def run_all(self) -> None:
-        self.run(self.target_peers(), self.wf.list_operations())
+    def run_all_operations(self) -> None:
+        """Run every operation, in menu order, on the checked target devices."""
+        self.run_operations(self.target_peers(), self.wf.list_operations())
 
     def send_custom(self) -> None:
+        """Send the custom message on the checked targets as an operation named "Custom".
+
+        Any reply passes.
+        """
         text = self.custom_text.text()
         if not text:
             return
@@ -765,17 +911,24 @@ class OperationsStep(QWidget):
         except ValueError as exc:
             show_error(self, "Custom message", exc)
             return
-        self.run(self.target_peers(), [op])
+        self.run_operations(self.target_peers(), [op])
 
-    def new_op(self) -> None:
-        self._edit(None)
+    def new_operation(self) -> None:
+        """Open the dialog for a new operation."""
+        self._open_operation_dialog(None)
 
-    def edit_op(self) -> None:
-        ops = self._ops_for(self.tree.selectedItems())
+    def edit_selected_operation(self) -> None:
+        """Open the dialog for the first selected operation."""
+        ops = self._operations_for_items(self.tree.selectedItems())
         if ops:
-            self._edit(ops[0])
+            self._open_operation_dialog(ops[0])
 
-    def _edit(self, op: DeviceOperation | None) -> None:
+    def _open_operation_dialog(self, op: DeviceOperation | None) -> None:
+        """Show the operation dialog and save the operation if accepted.
+
+        Args:
+            op: Operation to edit, or None for a new one.
+        """
         categories = sorted({o.category for o in self.wf.list_operations()} | {"General"})
         dialog = OperationDialog(op, categories, self)
         if dialog.exec():
@@ -783,16 +936,18 @@ class OperationsStep(QWidget):
                 self.wf.save_operation(dialog.op)
             except (WorkflowError, ValueError) as exc:
                 show_error(self, "Save operation", exc)
-            self.refresh_ops()
+            self.refresh_operations()
 
-    def delete_op(self) -> None:
-        ops = self._ops_for(self.tree.selectedItems())
+    def delete_selected_operations(self) -> None:
+        """Delete the selected operations after confirmation."""
+        ops = self._operations_for_items(self.tree.selectedItems())
         if ops and QMessageBox.question(self, "Delete operations", f"Delete {len(ops)} operation(s)?") == QMessageBox.StandardButton.Yes:
             for op in ops:
                 self.wf.delete_operation(op.id)
-            self.refresh_ops()
+            self.refresh_operations()
 
-    def import_ops(self) -> None:
+    def import_command_set(self) -> None:
+        """Import a command set JSON file, merging with or replacing the menu."""
         from ...core.config import PROJECT_ROOT
 
         path, _ = QFileDialog.getOpenFileName(self, "Import command set", str(PROJECT_ROOT / "resources" / "command_sets"),
@@ -809,32 +964,49 @@ class OperationsStep(QWidget):
         except (OSError, ValueError, KeyError, TypeError) as exc:
             show_error(self, "Import command set", f"{type(exc).__name__}: {exc}")
             return
-        self.refresh_ops()
+        self.refresh_operations()
         QMessageBox.information(self, "Import command set", f"Imported {count} operation(s).")
 
-    def export_ops(self) -> None:
+    def export_command_set(self) -> None:
+        """Save every operation as a command set JSON file."""
         path, _ = QFileDialog.getSaveFileName(self, "Export command set", "command_set.json", "Command set (*.json)")
         if path:
             Path(path).write_text(json.dumps({"operations": self.wf.export_operations()}, indent=2), encoding="utf-8")
 
     # -- results ----------------------------------------------------------
     def reload_results(self) -> None:
+        """Reload the results table for the current session."""
         sid = self.wf.session_id
         rows = self.ctx.operations.results.for_session(sid) if sid is not None else []
         self.results_model.set_records(rows)
         self.results_view.scrollToBottom()
 
-    def _on_result(self, row: dict) -> None:
+    def _append_result(self, row: dict) -> None:
+        """Append a finished operation result if it belongs to the current session.
+
+        Args:
+            row: Result row emitted by the operation runner.
+        """
         if row.get("session_id") == self.wf.session_id:
             self.results_model.records.append(row)
             self.results_model.set_records(self.results_model.records)
             self.results_view.scrollToBottom()
 
-    def _on_queue(self, count: int) -> None:
+    def _show_queue_size(self, count: int) -> None:
+        """Show how many operations are queued or running.
+
+        Args:
+            count: Number of pending operations.
+        """
         self.pending.setText(f"{count} queued / running" if count else "idle")
         self.pending.setStyleSheet(f"color: {theme.WARN if count else theme.TEXT_DIM};")
 
     def showEvent(self, event) -> None:  # noqa: N802
+        """Refresh the targets and results whenever the step becomes visible.
+
+        Args:
+            event: Qt show event.
+        """
         super().showEvent(event)
         self.refresh_targets()
         self.reload_results()
@@ -845,6 +1017,13 @@ class OperationsStep(QWidget):
 # =============================================================================
 class ReportStep(QWidget):
     def __init__(self, ctx: AppContext, page: WorkflowPage, parent: QWidget | None = None) -> None:
+        """Build the session picker, report preview and save actions.
+
+        Args:
+            ctx: Application context.
+            page: Workflow page, used to refresh the stepper.
+            parent: Optional parent widget.
+        """
         super().__init__(parent)
         self.ctx = ctx
         self.wf = ctx.workflow
@@ -857,7 +1036,7 @@ class ReportStep(QWidget):
         self.session.setMinimumWidth(320)
         row.addWidget(self.session)
         refresh = QPushButton("Refresh")
-        refresh.clicked.connect(self.render)
+        refresh.clicked.connect(self.render_report)
         row.addWidget(refresh)
         row.addStretch(1)
         self.end_button = QPushButton("■ Finish session")
@@ -869,10 +1048,10 @@ class ReportStep(QWidget):
         self.browser.setOpenExternalLinks(False)
         layout.addWidget(self.browser, 1)
         actions = QHBoxLayout()
-        for text, slot, name in (("Save HTML…", lambda: self.save("html"), "Primary"),
-                                 ("Save Markdown…", lambda: self.save("md"), ""),
-                                 ("Save results CSV…", lambda: self.save("csv"), ""),
-                                 ("Save all to reports folder", self.save_all, ""),
+        for text, slot, name in (("Save HTML…", lambda: self.save_report_as("html"), "Primary"),
+                                 ("Save Markdown…", lambda: self.save_report_as("md"), ""),
+                                 ("Save results CSV…", lambda: self.save_report_as("csv"), ""),
+                                 ("Save all to reports folder", self.save_all_reports, ""),
                                  ("Open in browser", self.open_in_browser, "")):
             b = QPushButton(text)
             b.setObjectName(name)
@@ -880,14 +1059,15 @@ class ReportStep(QWidget):
             actions.addWidget(b)
         actions.addStretch(1)
         layout.addLayout(actions)
-        self.saved = _hint("")
+        self.saved = _hint_label("")
         layout.addWidget(self.saved)
-        self.session.currentIndexChanged.connect(self.render)
+        self.session.currentIndexChanged.connect(self.render_report)
         self.wf.session_changed.connect(lambda _s: self.reload_sessions())
         self.wf.database_changed.connect(lambda _p: self.reload_sessions())
         self.reload_sessions()
 
     def reload_sessions(self) -> None:
+        """Refill the session list, selecting the recording session, and render its report."""
         current = self.session.currentData()
         self.session.blockSignals(True)
         self.session.clear()
@@ -898,9 +1078,13 @@ class ReportStep(QWidget):
         self.session.setCurrentIndex(max(0, index))
         self.session.blockSignals(False)
         self.end_button.setEnabled(self.wf.session_id is not None)
-        self.render()
+        self.render_report()
 
-    def render(self) -> None:
+    def render_report(self) -> None:
+        """Build and show the HTML report for the selected session.
+
+        Pending packets are written first so the report is complete.
+        """
         sid = self.session.currentData()
         if sid is None:
             self._data = None
@@ -915,47 +1099,75 @@ class ReportStep(QWidget):
             return
         self.browser.setHtml(render_html(self._data))
 
-    def _content(self, kind: str) -> str:
+    def _render_as(self, kind: str) -> str:
+        """Render the current report data in one output format.
+
+        Args:
+            kind: ``"html"``, ``"md"`` or ``"csv"``.
+
+        Returns:
+            The rendered report.
+        """
         assert self._data is not None
         return {"html": render_html, "md": render_markdown, "csv": render_csv}[kind](self._data)
 
-    def _default_name(self, kind: str) -> str:
+    def _default_file_name(self, kind: str) -> str:
+        """Build a file name from the session id and name.
+
+        Args:
+            kind: ``"html"``, ``"md"`` or ``"csv"``.
+
+        Returns:
+            A name such as ``session_3_GUI_run.html``.
+        """
         s = self._data["session"] if self._data else {"id": 0, "name": "session"}
         safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in s["name"]).strip("_") or "session"
         suffix = {"html": "html", "md": "md", "csv": "csv"}[kind]
         return f"session_{s['id']}_{safe}{'_results' if kind == 'csv' else ''}.{suffix}"
 
-    def save(self, kind: str) -> None:
+    def save_report_as(self, kind: str) -> None:
+        """Ask where to save the report in one format and write it.
+
+        Args:
+            kind: ``"html"``, ``"md"`` or ``"csv"``.
+        """
         if self._data is None:
             return
         folder = self.ctx.config.resolve(self.ctx.config.reports_dir)
         folder.mkdir(parents=True, exist_ok=True)
         filters = {"html": "HTML (*.html)", "md": "Markdown (*.md)", "csv": "CSV (*.csv)"}
-        path, _ = QFileDialog.getSaveFileName(self, "Save report", str(folder / self._default_name(kind)), filters[kind])
+        path, _ = QFileDialog.getSaveFileName(self, "Save report", str(folder / self._default_file_name(kind)), filters[kind])
         if path:
-            Path(path).write_text(self._content(kind), encoding="utf-8")
+            Path(path).write_text(self._render_as(kind), encoding="utf-8")
             self.saved.setText(f"Saved {path}")
 
-    def save_all(self) -> list[Path]:
+    def save_all_reports(self) -> list[Path]:
+        """Write the HTML, Markdown and CSV reports to the reports folder.
+
+        Returns:
+            The written paths; empty if there is no report.
+        """
         if self._data is None:
             return []
-        self.render()  # latest data
+        self.render_report()  # latest data
         folder = self.ctx.config.resolve(self.ctx.config.reports_dir)
         folder.mkdir(parents=True, exist_ok=True)
         written = []
         for kind in ("html", "md", "csv"):
-            path = folder / self._default_name(kind)
-            path.write_text(self._content(kind), encoding="utf-8")
+            path = folder / self._default_file_name(kind)
+            path.write_text(self._render_as(kind), encoding="utf-8")
             written.append(path)
         self.saved.setText("Saved " + ", ".join(str(p) for p in written))
         return written
 
     def open_in_browser(self) -> None:
-        paths = self.save_all()
+        """Save every report format and open the HTML one in the default browser."""
+        paths = self.save_all_reports()
         if paths:
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(paths[0])))
 
     def finish_session(self) -> None:
+        """End the recording session, optionally stop the server, and save the reports."""
         if self.wf.session_id is None:
             return
         stop = QMessageBox.question(self, "Finish session", "Finish the session and save the report.\n\n"
@@ -971,10 +1183,15 @@ class ReportStep(QWidget):
         index = self.session.findData(sid)
         if index >= 0:
             self.session.setCurrentIndex(index)
-        self.save_all()
+        self.save_all_reports()
         self.page.update_steps()
 
     def showEvent(self, event) -> None:  # noqa: N802
+        """Reload the sessions whenever the step becomes visible.
+
+        Args:
+            event: Qt show event.
+        """
         super().showEvent(event)
         self.reload_sessions()
 
@@ -984,6 +1201,12 @@ class ReportStep(QWidget):
 # =============================================================================
 class WorkflowPage(QWidget):
     def __init__(self, ctx: AppContext, parent: QWidget | None = None) -> None:
+        """Build the step buttons, the five step widgets and the back/next navigation.
+
+        Args:
+            ctx: Application context.
+            parent: Optional parent widget.
+        """
         super().__init__(parent)
         self.ctx = ctx
         self.wf = ctx.workflow
@@ -1044,6 +1267,14 @@ class WorkflowPage(QWidget):
         self.go_to(0)
 
     def step_done(self, index: int) -> bool:
+        """Report whether a step's requirement is met.
+
+        Args:
+            index: Zero-based step index.
+
+        Returns:
+            True if the step is complete.
+        """
         return [
             self.wf.server_running,
             self.wf.database_confirmed,
@@ -1052,8 +1283,15 @@ class WorkflowPage(QWidget):
             True,
         ][index]
 
-    def blocker(self, index: int) -> str:
-        """Why step ``index`` cannot be opened yet ("" when it can)."""
+    def step_blocker(self, index: int) -> str:
+        """Explain why a step cannot be opened yet.
+
+        Args:
+            index: Zero-based step index.
+
+        Returns:
+            The reason, or ``""`` when the step can be opened.
+        """
         reasons = ["Start the server first.", "Confirm a database first.", "Start a session first.",
                    "Start a session first."]
         for i in range(min(index, 3)):
@@ -1062,8 +1300,13 @@ class WorkflowPage(QWidget):
         return ""
 
     def go_to(self, index: int) -> None:
+        """Show a step, refusing to move forward to a step that is still locked.
+
+        Args:
+            index: Zero-based step index; clamped to the valid range.
+        """
         index = max(0, min(len(STEPS) - 1, index))
-        reason = self.blocker(index)
+        reason = self.step_blocker(index)
         if reason and index > self.stack.currentIndex():
             self.next_hint.setText(reason)
             self.next_hint.setStyleSheet(f"color: {theme.WARN};")
@@ -1072,17 +1315,18 @@ class WorkflowPage(QWidget):
         self.update_steps()
 
     def update_steps(self) -> None:
+        """Update the step buttons, back/next navigation and the summary line."""
         current = self.stack.currentIndex()
         for i, b in enumerate(self.step_buttons):
             done = self.step_done(i) and i < 4
             b.setChecked(i == current)
-            locked = bool(self.blocker(i))
+            locked = bool(self.step_blocker(i))
             b.setEnabled(not locked or i <= current)
             b.setText(f"{'✓' if done else i + 1}  {STEPS[i]}")
             b.setStyleSheet(f"color: {theme.OK};" if done and i != current else "")
         self.back.setEnabled(current > 0)
         self.next.setVisible(current < len(STEPS) - 1)
-        reason = self.blocker(current + 1) if current < len(STEPS) - 1 else ""
+        reason = self.step_blocker(current + 1) if current < len(STEPS) - 1 else ""
         self.next.setEnabled(not reason)
         self.next_hint.setText(reason)
         self.next_hint.setStyleSheet(f"color: {theme.TEXT_DIM};")

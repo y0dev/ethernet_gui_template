@@ -25,7 +25,7 @@ class _UdpEndpoint(Endpoint):
         self._socket.readyRead.connect(self._on_ready_read)
         self._socket.errorOccurred.connect(self._on_error)
 
-    def _bind(self) -> bool:
+    def _bind_socket(self) -> bool:
         """Bind the socket to the configured local address and port.
 
         A failure is reported and sets the state to ``ERROR``.

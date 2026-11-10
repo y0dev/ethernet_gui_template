@@ -5,6 +5,14 @@
 
 Writes plugins/<key>.py with a working page (header, a button, a table, a
 named-query call) and adds it to project.json -> plugins and pages.
+
+Updating the page later: the tool only creates the starting file and never
+overwrites it.  Edit plugins/<key>.py directly and restart the application.
+Change the navigation title in register(), the order in project.json ->
+pages, and hide the page by removing "plugins.<key>" from project.json ->
+plugins.  To start again from the latest template, move your file aside and
+run the tool again; existing project.json entries are not duplicated.  See
+TEMPLATE.md, section "Update a generated page".
 """
 
 from __future__ import annotations

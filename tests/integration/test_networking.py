@@ -15,6 +15,11 @@ TIMEOUT = 5000
 
 
 def free_port() -> int:
+    """Find a local TCP port that is currently free.
+
+    Returns:
+        The port number.
+    """
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
         return s.getsockname()[1]
@@ -22,6 +27,14 @@ def free_port() -> int:
 
 @pytest.fixture
 def tcp_pair(qtbot):
+    """Provide a connected TCP server and client using 2-byte length framing.
+
+    Args:
+        qtbot: pytest-qt robot fixture.
+
+    Yields:
+        The server and client, closed afterwards.
+    """
     server = TcpServer(0, "127.0.0.1", lambda: LengthPrefixedFramer(2))
     server.open()
     assert server.state is ConnectionState.LISTENING
@@ -35,6 +48,12 @@ def tcp_pair(qtbot):
 
 
 def test_tcp_round_trip_with_framing(qtbot, tcp_pair):
+    """Framed messages travel both ways and the byte and frame counters add up.
+
+    Args:
+        qtbot: pytest-qt robot fixture.
+        tcp_pair: Connected server and client.
+    """
     server, client = tcp_pair
     received = []
     server.frame_received.connect(lambda f, p: received.append(f))
@@ -53,7 +72,11 @@ def test_tcp_round_trip_with_framing(qtbot, tcp_pair):
 
 
 def test_tcp_stream_reassembly_from_raw_socket(qtbot):
-    """A message split across many writes still arrives as one frame."""
+    """A message split across many writes still arrives as one frame.
+
+    Args:
+        qtbot: pytest-qt robot fixture.
+    """
     server = TcpServer(0, "127.0.0.1", lambda: DelimiterFramer(b"\n"))
     server.open()
     frames = []
@@ -71,6 +94,11 @@ def test_tcp_stream_reassembly_from_raw_socket(qtbot):
 
 
 def test_tcp_connect_failure_reports_error(qtbot):
+    """Connecting to a closed port reports an error and sending fails.
+
+    Args:
+        qtbot: pytest-qt robot fixture.
+    """
     client = TcpClient("127.0.0.1", free_port(), timeout_ms=2000)
     with qtbot.waitSignal(client.error_occurred, timeout=TIMEOUT):
         client.open()
@@ -81,6 +109,11 @@ def test_tcp_connect_failure_reports_error(qtbot):
 
 
 def test_tcp_auto_reconnect(qtbot):
+    """A client with auto-reconnect connects once a server starts listening.
+
+    Args:
+        qtbot: pytest-qt robot fixture.
+    """
     port = free_port()
     client = TcpClient("127.0.0.1", port, timeout_ms=1000, auto_reconnect=True, reconnect_interval_ms=200)
     client.open()
@@ -95,6 +128,11 @@ def test_tcp_auto_reconnect(qtbot):
 
 
 def test_udp_round_trip(qtbot):
+    """UDP datagrams travel both ways, and the server replies to the last sender.
+
+    Args:
+        qtbot: pytest-qt robot fixture.
+    """
     server = UdpServer(0, "127.0.0.1")
     server.open()
     assert server.state is ConnectionState.LISTENING
@@ -117,6 +155,7 @@ def test_udp_round_trip(qtbot):
 
 
 def test_udp_server_without_peer_cannot_send():
+    """A UDP server with no known peer refuses to send."""
     server = UdpServer(0, "127.0.0.1")
     server.open()
     try:
@@ -126,13 +165,20 @@ def test_udp_server_without_peer_cannot_send():
 
 
 def test_udp_client_rejects_hostname():
+    """A UDP client given a host name instead of an IP address goes to the error state."""
     client = UdpClient("not-an-ip.example", 9)
     client.open()
     assert client.state is ConnectionState.ERROR
 
 
 def test_manager_capture_and_device_test_case(qtbot, db, tmp_path):
-    """Two managed connections talk; capture records both directions to SQLite."""
+    """Two managed connections talk, device test cases are judged and capture records both directions.
+
+    Args:
+        qtbot: pytest-qt robot fixture.
+        db: Migrated test database.
+        tmp_path: pytest temporary directory.
+    """
     from app.core.services import TestRunner  # Test Bench feature
 
     manager = ConnectionManager(db)

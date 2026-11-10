@@ -16,6 +16,16 @@ from app.ui.registry import BUILTIN_PAGES
 
 @pytest.fixture
 def window(qtbot, tmp_path, monkeypatch):
+    """Provide a shown main window over a fresh database and isolated settings.
+
+    Args:
+        qtbot: pytest-qt robot fixture.
+        tmp_path: pytest temporary directory.
+        monkeypatch: pytest monkeypatch fixture.
+
+    Yields:
+        The main window; it and its services are shut down afterwards.
+    """
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))  # isolate QSettings
     config = AppConfig(
         database_path=str(tmp_path / "gui.db"), backup_dir=str(tmp_path / "bk"),
@@ -37,19 +47,39 @@ def window(qtbot, tmp_path, monkeypatch):
 
 
 def page_or_skip(window, key: str):
-    """The page for ``key``; skips the test if this project removed that page."""
+    """Return the page for a key, skipping the test if the project removed it.
+
+    Args:
+        window: Main window.
+        key: Page key.
+
+    Returns:
+        The page widget.
+    """
     page = window.pages_by_key.get(key)
     if page is None:
         pytest.skip(f"page '{key}' is not part of this project")
     return page
 
 
-def show(window, key: str) -> None:
+def show_page(window, key: str) -> None:
+    """Select a page in the navigation.
+
+    Args:
+        window: Main window.
+        key: Page key; the test is skipped if the page does not exist.
+    """
     page = page_or_skip(window, key)
     window.nav.setCurrentRow(window.stack.indexOf(page))
 
 
 def test_every_page_opens(qtbot, window):
+    """Every built-in page is listed and can be selected.
+
+    Args:
+        qtbot: pytest-qt robot fixture.
+        window: Main window.
+    """
     assert window.nav.count() == len(BUILTIN_PAGES)
     for row in range(window.nav.count()):
         window.nav.setCurrentRow(row)
@@ -58,12 +88,18 @@ def test_every_page_opens(qtbot, window):
 
 
 def test_pages_reflect_services(qtbot, window):
+    """Pages show service data, and the packet monitor's hex and direction filters work.
+
+    Args:
+        qtbot: pytest-qt robot fixture.
+        window: Main window.
+    """
     ctx = window.ctx
     ctx.devices.save(Device("dev-a", "127.0.0.1", 1234))
     ctx.connections.save_config(ConnectionConfig("c-a", Transport.UDP_SERVER, "127.0.0.1"))
-    show(window, "devices")
+    show_page(window, "devices")
     assert page_or_skip(window, "devices").model.rowCount() == 1
-    show(window, "connections")
+    show_page(window, "connections")
     assert page_or_skip(window, "connections").model.rowCount() == 1
 
     monitor = page_or_skip(window, "packet_monitor")
@@ -78,6 +114,12 @@ def test_pages_reflect_services(qtbot, window):
 
 
 def test_porting_page_lists_modules(qtbot, window):
+    """The porting page lists a project's modules and shows the selected one.
+
+    Args:
+        qtbot: pytest-qt robot fixture.
+        window: Main window.
+    """
     porting = window.ctx.porting
     pid = porting.create_project("fw")
     porting.add_module(pid, "src/a.c")
@@ -92,6 +134,11 @@ def test_porting_page_lists_modules(qtbot, window):
 
 
 def test_connection_dialog_returns_enum(qtbot):
+    """The connection dialog stores a ``Transport`` enum and raw framing for UDP.
+
+    Args:
+        qtbot: pytest-qt robot fixture.
+    """
     from app.ui.dialogs.editors import ConnectionDialog
 
     dialog = ConnectionDialog(None, [], [])
@@ -104,7 +151,12 @@ def test_connection_dialog_returns_enum(qtbot):
 
 
 def test_runner_executes_pytest_subprocess(qtbot, db):
-    """The Test Bench path: pytest in a QProcess, JUnit parsed, results stored."""
+    """The Test Bench path runs pytest in a QProcess, parses JUnit and stores results.
+
+    Args:
+        qtbot: pytest-qt robot fixture.
+        db: Migrated test database.
+    """
     from app.core.services import ConnectionManager, TestRunner
 
     runner = TestRunner(db, ConnectionManager(db))
@@ -116,6 +168,13 @@ def test_runner_executes_pytest_subprocess(qtbot, db):
 
 
 def test_window_follows_project_profile(qtbot, tmp_path, monkeypatch):
+    """The window follows the project profile: title, page order, start page, plugins and SQL folders.
+
+    Args:
+        qtbot: pytest-qt robot fixture.
+        tmp_path: pytest temporary directory.
+        monkeypatch: pytest monkeypatch fixture.
+    """
     from PySide6.QtCore import QCoreApplication, QEvent, QObject
 
     from app.project import ProjectProfile
