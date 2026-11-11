@@ -1,3 +1,14 @@
+"""Network Connections page: create, open and talk over TCP/UDP connections.
+
+Top half: a table of saved connections (clients and servers) with their
+state and live counters. Bottom half: a *Transmit* panel that sends HEX or
+ASCII to the selected connection, and for servers lets you pick which
+connected client receives it. Opening, closing and sending are done by
+``ctx.connections`` (the ConnectionManager); the page only shows its state
+and forwards button clicks. Received data is shown in the Packet Monitor,
+not here.
+"""
+
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, QTimer
@@ -37,6 +48,7 @@ def _describe_target(c: ConnectionConfig) -> str:
         ``host:port`` for clients, or ``bind:local_port`` for servers, with
         ``*`` for any interface.
     """
+    # Clients show where they connect to; servers show what they listen on.
     if c.transport.value.endswith("client"):
         return f"{c.host}:{c.port}"
     return f"{c.host or '*'}:{c.local_port}"
@@ -58,6 +70,7 @@ class ConnectionsPage(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(18, 14, 18, 14)
         header = PageHeader("Network Connections", "TCP/UDP clients and servers. Multiple connections can be open at once.")
+        # Header buttons, kept by key so the selection panel can enable/disable Open and Close.
         self.buttons = {}
         for key, text, name in (("new", "New", "Primary"), ("edit", "Edit", ""), ("delete", "Delete", "Danger"),
                                 ("open", "Open", ""), ("close", "Close", ""), ("reset", "Reset counters", "")):
@@ -73,7 +86,10 @@ class ConnectionsPage(QWidget):
         self.buttons["reset"].clicked.connect(self.reset_counters)
         layout.addWidget(header)
 
+        # Connection table on top, transmit panel below (3:1 by default, drag to resize).
         splitter = QSplitter(Qt.Orientation.Vertical)
+        # One row per connection. Counters come from the open endpoint, so a closed connection shows
+        # zeros.
         self.model = RecordTableModel([
             Column("name", "Name"), Column("transport", "Transport"), Column("target", "Endpoint"),
             Column("framing", "Framing"), Column("protocol", "Protocol"),
@@ -88,6 +104,8 @@ class ConnectionsPage(QWidget):
         self.view.doubleClicked.connect(lambda _i: self.edit_selected())
         splitter.addWidget(self.view)
 
+        # Transmit panel: selected connection and its state, HEX/ASCII mode, target peer, payload
+        # and Send.
         send_box = QGroupBox("Transmit")
         send_layout = QVBoxLayout(send_box)
         row = QHBoxLayout()
@@ -107,6 +125,8 @@ class ConnectionsPage(QWidget):
         row.addWidget(self.mode_ascii)
         send_layout.addLayout(row)
         form = QFormLayout()
+        # Who receives the message. Filled in _update_selection_panel() from the selected connection
+        # type.
         self.peer = QComboBox()
         self.peer.setToolTip("Servers: choose a client, or 'all clients' / 'last sender'")
         form.addRow("Peer", self.peer)
@@ -130,12 +150,16 @@ class ConnectionsPage(QWidget):
         splitter.setStretchFactor(1, 1)
         layout.addWidget(splitter, 1)
 
+        # Live byte count / parse error under the payload as you type or switch mode.
         self.payload.textChanged.connect(self._update_preview)
         self.mode_hex.toggled.connect(self._update_preview)
         self.view.selectionModel().selectionChanged.connect(self._update_selection_panel)
+        # Redraw when connections are added, removed, change state or gain/lose clients.
         self.manager.configs_changed.connect(self.refresh)
         self.manager.state_changed.connect(lambda *_: self.refresh())
         self.manager.peers_changed.connect(lambda *_: self.refresh())
+        # Counters change with every frame and have no signal of their own, so poll twice a second
+        # while the page is visible.
         self._timer = QTimer(self)
         self._timer.setInterval(500)
         self._timer.timeout.connect(self._refresh_if_visible)
@@ -150,12 +174,15 @@ class ConnectionsPage(QWidget):
 
     def refresh(self) -> None:
         """Rebuild the connection table, keeping the current selection."""
+        # Remember the selection: set_records() resets the view, so the same row is selected again
+        # afterwards.
         selected = self._selected_connection_id()
         rows = []
         for c in self.manager.configs():
             ep = self.manager.endpoint(c.id)
             rows.append({
                 "id": c.id, "name": c.name, "transport": c.transport.label, "target": _describe_target(c),
+                # UDP has no stream framing; each datagram is one message.
                 "framing": c.framing.get("type", "raw") if c.transport.value.startswith("tcp") else "datagram",
                 "protocol": c.protocol_name or "raw", "state": self.manager.state(c.id).value,
                 "peers": len(ep.peers()) if ep else 0,
@@ -200,13 +227,19 @@ class ConnectionsPage(QWidget):
         state = self.manager.state(cid)
         self.selected_label.setText(f"{config.name}  ·  {config.transport.label}")
         self.state_dot.set_state(state.value)
+        # Open only when not already open/connecting; Close whenever an endpoint exists (including a
+        # reconnecting one).
         self.buttons["open"].setEnabled(not state.is_active)
         self.buttons["close"].setEnabled(self.manager.endpoint(cid) is not None)
         ep = self.manager.endpoint(cid)
         peers = ep.peers() if ep else []
+        # Rebuild the peer list without firing change signals, keeping the previous choice if that
+        # peer is still connected.
         current = self.peer.currentData()
         self.peer.blockSignals(True)
         self.peer.clear()
+        # The first entry (data None) is the default target for each connection type; servers then
+        # list each connected client.
         if config.transport.value == "tcp_server":
             self.peer.addItem("All clients", None)
         elif config.transport.value == "udp_server":
@@ -234,6 +267,7 @@ class ConnectionsPage(QWidget):
         config = self.manager.config(cid) if cid is not None else None
         if config is None:
             return
+        # Changing an open connection closes it first, so ask before editing.
         if self.manager.endpoint(cid) is not None and QMessageBox.question(
             self, "Edit connection", "The connection is open and will be closed to apply changes. Continue?"
         ) != QMessageBox.StandardButton.Yes:
@@ -249,6 +283,8 @@ class ConnectionsPage(QWidget):
             config: Configuration edited in the dialog.
         """
         try:
+            # The manager validates (port ranges, framing options) and emits configs_changed, which
+            # refreshes the table.
             self.manager.save_config(config)
         except Exception as exc:
             show_error(self, "Save connection", exc)
@@ -297,6 +333,7 @@ class ConnectionsPage(QWidget):
             ValueError: If the text is invalid for the mode.
         """
         text = self.payload.toPlainText()
+        # HEX accepts "01 02", "0x01,0x02" or "0102"; ASCII understands escapes such as \r \n \xNN.
         return parse_hex(text) if self.mode_hex.isChecked() else parse_ascii(text)
 
     def _update_preview(self) -> None:
@@ -325,6 +362,8 @@ class ConnectionsPage(QWidget):
             return
         if not data:
             return
+        # send() returns False instead of raising (closed connection, no clients); the endpoint
+        # keeps the reason.
         if not self.manager.send(cid, data, self.peer.currentData()):
             ep = self.manager.endpoint(cid)
             show_error(self, "Send", ep.last_error if ep else "Connection is not open.")

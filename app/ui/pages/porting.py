@@ -1,3 +1,17 @@
+"""C-to-Python Porting page: track every C source file on its way to Python.
+
+A *project* is a C code base; each C file becomes a *module* with a status
+(Not Analyzed -> Analyzed -> Ready to Port -> In Progress -> Ported ->
+Verification Required -> Verified, or Blocked). Importing
+a C folder scans the files for symbols and dependencies. For the selected
+module the right-hand tabs show: overview and status, dependencies, a C
+symbol -> Python replacement mapping, notes, verification runs, and a report.
+
+The rules (for example: *Verified* needs a recorded, passing comparison
+against the original C) live in ``ctx.porting`` (PortingService); this page
+shows the data and reports any rule the user breaks.
+"""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -48,6 +62,8 @@ def _porting_status_color(status) -> str | None:
     return theme.PORTING_STATUS_COLORS.get(value)
 
 
+# Dialog for recording the result of a C-vs-Python comparison run. The checkbox must be ticked:
+# results are only recorded from tests that really ran.
 class VerificationDialog(QDialog):
     """Records the outcome of a verification run that was actually executed."""
 
@@ -70,6 +86,7 @@ class VerificationDialog(QDialog):
         self.failed = QSpinBox()
         self.failed.setRange(0, 1_000_000)
         self.binary = QComboBox()
+        # Three-state: None = not checked, True = identical bytes, False = differences found.
         self.binary.addItem("Not checked", None)
         self.binary.addItem("Byte-for-byte identical", True)
         self.binary.addItem("Differences found", False)
@@ -124,6 +141,7 @@ class PortingPage(QWidget):
         )
         layout.addWidget(header)
 
+        # Toolbar: project chooser, project/module actions, and a summary of the selected project.
         bar = QHBoxLayout()
         self.project = QComboBox()
         self.project.setMinimumWidth(220)
@@ -138,10 +156,12 @@ class PortingPage(QWidget):
             bar.addWidget(b)
         self.project_info = QLabel("")
         self.project_info.setObjectName("Dim")
+        # Let a long summary be cut off rather than widen the window.
         self.project_info.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         bar.addWidget(self.project_info, 1)
         layout.addLayout(bar)
 
+        # Modules of the project on the left, details of the selected module on the right.
         splitter = QSplitter(Qt.Orientation.Horizontal)
         self.modules_model = RecordTableModel([
             Column("c_source_path", "C source"), Column("python_module_path", "Python module", fmt=lambda p: p or "-"),
@@ -159,6 +179,7 @@ class PortingPage(QWidget):
         splitter.setSizes([620, 620])
         layout.addWidget(splitter, 1)
 
+        # Changing project reloads the module list; selecting a module fills the detail tabs.
         self.project.currentIndexChanged.connect(self.refresh_modules)
         self.modules_view.selectionModel().currentRowChanged.connect(lambda *_: self.show_module())
         self.reload_projects()
@@ -173,12 +194,15 @@ class PortingPage(QWidget):
         panel = QWidget()
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(6, 0, 0, 0)
+        # Detail panel: a title and six tabs, all disabled until a module is selected.
         self.detail_title = QLabel("Select a module")
         self.detail_title.setObjectName("PageTitle")
         layout.addWidget(self.detail_title)
         self.tabs = QTabWidget()
         layout.addWidget(self.tabs, 1)
 
+        # Overview tab: paths and coverage (Save), and the status with a hint saying whether
+        # Verified is allowed yet.
         overview = QWidget()
         form = QFormLayout(overview)
         self.c_path = QLabel("-")
@@ -188,6 +212,7 @@ class PortingPage(QWidget):
         self.py_path = QLineEdit()
         self.py_path.setPlaceholderText("e.g. app/core/compatibility/crc.py")
         self.coverage = QDoubleSpinBox()
+        # -1 shows as "unknown" and is stored as None.
         self.coverage.setRange(-1, 100)
         self.coverage.setSpecialValueText("unknown")
         self.coverage.setSuffix(" %")
@@ -213,10 +238,14 @@ class PortingPage(QWidget):
         form.addRow("", self.verify_hint)
         self.tabs.addTab(overview, "Overview")
 
+        # Dependencies tab: what this file includes or calls but does not define (from the source
+        # scan).
         self.deps_model = RecordTableModel([Column("kind", "Kind"), Column("depends_on", "Depends on")])
         self.tabs.addTab(self._build_table_tab(self.deps_model, "Includes and calls to symbols not defined in this file "
                                          "(from the source scan; review against the real build)."), "Dependencies")
 
+        # Function mapping tab: every C symbol found and the Python name that replaces it. Double-
+        # click to map one.
         mappings = QWidget()
         mv = QVBoxLayout(mappings)
         mv.addWidget(QLabel("C symbols found in the source and their Python replacements."))
@@ -241,6 +270,8 @@ class PortingPage(QWidget):
         mv.addLayout(mrow)
         self.tabs.addTab(mappings, "Function mapping")
 
+        # Notes tab: free-text notes. Categories other than plain "Note" (issues, intentional
+        # differences) are highlighted.
         notes = QWidget()
         nv = QVBoxLayout(notes)
         self.notes_model = RecordTableModel([
@@ -267,6 +298,7 @@ class PortingPage(QWidget):
         nv.addLayout(nrow)
         self.tabs.addTab(notes, "Notes && issues")
 
+        # Verification tab: every recorded comparison run against the C reference.
         verification = QWidget()
         vv = QVBoxLayout(verification)
         self.verif_model = RecordTableModel([
@@ -288,6 +320,7 @@ class PortingPage(QWidget):
         vv.addWidget(record, 0, Qt.AlignmentFlag.AlignLeft)
         self.tabs.addTab(verification, "Verification")
 
+        # Report tab: the Markdown status report produced by "Status report…".
         self.report_view = HexView()
         self.tabs.addTab(self.report_view, "Report")
         self.tabs.setEnabled(False)
@@ -331,6 +364,8 @@ class PortingPage(QWidget):
         Args:
             select: Project id to select; defaults to the current one.
         """
+        # Refill the chooser without triggering refresh_modules once per item, then select the
+        # requested (or previous) project.
         current = select if select is not None else self._selected_project_id()
         self.project.blockSignals(True)
         self.project.clear()
@@ -368,6 +403,8 @@ class PortingPage(QWidget):
         if not root:
             return
         try:
+            # Scans the folder for .c/.h files and adds one module per new .c file; files already
+            # tracked are left alone.
             summary = self.service.import_sources(pid, Path(root))
         except Exception as exc:
             show_error(self, "Import", exc)
@@ -420,6 +457,7 @@ class PortingPage(QWidget):
     def refresh_modules(self) -> None:
         """Reload the module table and project summary, keeping the selection."""
         pid = self._selected_project_id()
+        # Remember the selected module so it stays selected after the table is reloaded.
         selected = self._selected_module()
         modules = self.service.list_modules(pid) if pid is not None else []
         self.modules_model.set_records(modules)
@@ -445,6 +483,8 @@ class PortingPage(QWidget):
         Returns:
             The module row, or None if nothing is selected.
         """
+        # refresh_modules() can run while __init__ is still building the page, before modules_view
+        # exists.
         index = self.modules_view.currentIndex() if hasattr(self, "modules_view") else None
         return self.modules_model.record(index.row()) if index is not None and index.isValid() else None
 
@@ -457,6 +497,7 @@ class PortingPage(QWidget):
             for model in (self.deps_model, self.map_model, self.notes_model, self.verif_model):
                 model.set_records([])
             return
+        # One call returns the module with its dependencies, mappings, notes and verification runs.
         detail = self.service.module_detail(module["id"])
         self.detail_title.setText(detail["name"])
         self.c_path.setText(detail["c_source_path"])
@@ -464,6 +505,8 @@ class PortingPage(QWidget):
         self.py_path.setText(detail["python_module_path"])
         self.coverage.setValue(-1 if detail["test_coverage"] is None else detail["test_coverage"])
         self.status.setCurrentIndex(list(PortingStatus).index(detail["status"]))
+        # Ask the service why the module cannot be Verified yet (None = it can), and show that under
+        # the status.
         blocker = self.service.verification_blocker(module["id"])
         self.verify_hint.setText(f"Cannot be marked Verified: {blocker}." if blocker else "Eligible for Verified.")
         self.verify_hint.setStyleSheet(f"color: {theme.WARN if blocker else theme.OK};")
@@ -493,6 +536,7 @@ class PortingPage(QWidget):
         if module is None:
             return
         try:
+            # The service enforces the status rules; a refused change is explained in a dialog.
             self.service.set_status(module["id"], PortingStatus(self.status.currentData()))
         except PortingRuleError as exc:
             show_error(self, "Porting status", exc)
@@ -550,6 +594,7 @@ class PortingPage(QWidget):
             return
         dialog = VerificationDialog(self)
         if dialog.exec():
+            # Recording a passing run is what can make the module eligible for Verified.
             functions = [f.strip() for f in dialog.functions.text().split(",") if f.strip()]
             self.service.record_verification(
                 module["id"], ReferenceKind(dialog.reference.currentData()), functions, dialog.passed.value(),

@@ -1,3 +1,14 @@
+"""Packet Monitor page: every frame sent or received on any connection.
+
+Frames come from ``ctx.capture`` (the CaptureService), which collects them from
+all connections and hands them over in batches several times a second, so a
+fast device cannot flood the GUI. The table can be filtered by direction,
+connection and text/hex search; selecting a frame shows its hex dump and,
+if a decoder applies, its decoded fields. The page can also record frames
+to a database session, reopen old sessions, export to CSV/JSON and replay
+frames on an open connection.
+"""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -40,10 +51,14 @@ class PacketMonitorPage(QWidget):
         super().__init__(parent)
         self.ctx = ctx
         self.capture = ctx.capture
+        # None while showing live traffic; a session id while showing a recorded session (live
+        # batches are then ignored).
         self._viewing_session: int | None = None
         layout = QVBoxLayout(self)
         layout.setContentsMargins(18, 14, 18, 14)
         header = PageHeader("Packet Monitor", "Every frame sent or received on any connection, as it went over the wire.")
+        # Header buttons. Record and Pause are toggle buttons; their state is kept in sync with the
+        # capture service.
         self.record_button = QPushButton("● Record")
         self.record_button.setCheckable(True)
         self.record_button.toggled.connect(self._toggle_recording)
@@ -64,6 +79,7 @@ class PacketMonitorPage(QWidget):
             header.actions.addWidget(b)
         layout.addWidget(header)
 
+        # Filter bar. The filters only hide rows (through the proxy model); they never drop packets.
         filters = QHBoxLayout()
         self.direction = QComboBox()
         self.direction.addItem("RX + TX", None)
@@ -87,7 +103,11 @@ class PacketMonitorPage(QWidget):
         filters.addWidget(self.source_label)
         layout.addLayout(filters)
 
+        # Packet table on top; below it the raw hex dump (left) and decoded fields (right) of the
+        # selected frame.
         splitter = QSplitter(Qt.Orientation.Vertical)
+        # model holds the packets (capped at max_live_packets); proxy filters them for the view. Row
+        # numbers in the view are proxy rows.
         self.model = PacketTableModel(ctx.config.max_live_packets, self)
         self.proxy = PacketFilterProxy(self)
         self.proxy.setSourceModel(self.model)
@@ -126,15 +146,19 @@ class PacketMonitorPage(QWidget):
         self.status.setObjectName("Dim")
         layout.addWidget(self.status)
 
+        # Service signals: new packet batches, clearing, and recording start/stop (which may come
+        # from the Session Workflow too).
         self.capture.packets_added.connect(self._append_live_packets)
         self.capture.cleared.connect(self.model.clear)
         self.capture.recording_changed.connect(self._on_recording_changed)
         self.ctx.connections.configs_changed.connect(self._reload_connections)
+        # Any filter change re-filters; selecting a row or another decoder redraws the detail panes.
         self.direction.currentIndexChanged.connect(self._apply_filter)
         self.connection.currentIndexChanged.connect(self._apply_filter)
         self.search.textChanged.connect(self._apply_filter)
         self.decoder.currentIndexChanged.connect(self._show_selected_packet)
         self.view.selectionModel().currentRowChanged.connect(lambda *_: self._show_selected_packet())
+        # Fill the choice lists, and show what was captured before this page was created.
         self._reload_connections()
         self._reload_decoders()
         self.model.set_packets(list(self.capture.live))
@@ -147,6 +171,8 @@ class PacketMonitorPage(QWidget):
         Args:
             packets: New packets from the capture service.
         """
+        # A recorded session is on screen; the live packets are still kept by the service and come
+        # back with Live.
         if self._viewing_session is not None:
             return
         self.model.append(packets)
@@ -213,6 +239,8 @@ class PacketMonitorPage(QWidget):
         head = (f"{format_timestamp(packet.timestamp)}  {packet.direction.value}  "
                 f"{packet.source} -> {packet.destination}  {packet.length} bytes\n\n")
         self.hex.setPlainText(head + hexdump(packet.data))
+        # None = use the protocol assigned to the packet's connection; "" = no decoding; otherwise a
+        # decoder name.
         choice = self.decoder.currentData()
         protocol = packet.protocol if choice is None else choice
         if not protocol:
@@ -224,6 +252,7 @@ class PacketMonitorPage(QWidget):
             return
         for f in message.fields:
             item = QTreeWidgetItem(self.fields, [f.name, f.text, str(f.offset), str(f.length), f.note])
+            # Fields that failed a check (wrong sync byte, bad CRC, ...) are shown in red.
             if not f.valid:
                 for col in range(5):
                     item.setForeground(col, QColor(theme.ERROR))
@@ -243,6 +272,8 @@ class PacketMonitorPage(QWidget):
         Args:
             on: New checked state of the record button.
         """
+        # Toggled on: ask for a name and start recording. Cancelling the dialog un-presses the
+        # button.
         if on and self.capture.session_id is None:
             name, ok = QInputDialog.getText(self, "Record session", "Session name:", text="Capture")
             if not ok:
@@ -258,6 +289,7 @@ class PacketMonitorPage(QWidget):
         Args:
             session_id: Session being recorded, or None when stopped.
         """
+        # Update the button without re-triggering _toggle_recording.
         self.record_button.blockSignals(True)
         self.record_button.setChecked(session_id is not None)
         self.record_button.setText("■ Stop recording" if session_id else "● Record")
@@ -271,11 +303,14 @@ class PacketMonitorPage(QWidget):
         Args:
             on: True to pause.
         """
+        # Pause freezes the view only: packets are still captured and recorded.
         self.capture.paused = on
         self.pause_button.setText("Resume" if on else "Pause")
 
     def clear_packets(self) -> None:
         """Clear the live buffer, or only the table when viewing a recorded session."""
+        # Live view: clear the service buffer (the database is untouched). Session view: clear only
+        # the table.
         if self._viewing_session is None:
             self.capture.clear()
         else:
@@ -293,6 +328,8 @@ class PacketMonitorPage(QWidget):
         choice, ok = QInputDialog.getItem(self, "Open session", "Recorded session:", labels, 0, False)
         if not ok:
             return
+        # Load the whole session from the database into the table, replacing the live view until
+        # Live is pressed.
         session = sessions[labels.index(choice)]
         self._viewing_session = session["id"]
         self.model.set_packets(self.capture.load_session(session["id"]))
@@ -308,6 +345,7 @@ class PacketMonitorPage(QWidget):
 
     def export_packets(self) -> None:
         """Export the selected packets, or every shown packet, to CSV or JSON."""
+        # Export the selection, or everything that passes the current filter if nothing is selected.
         packets = self._selected_packets() or [
             self.proxy.index(r, 0).data(Qt.ItemDataRole.UserRole) for r in range(self.proxy.rowCount())
         ]
@@ -327,6 +365,7 @@ class PacketMonitorPage(QWidget):
         if not packets:
             show_error(self, "Replay", "Select one or more packets to replay.")
             return
+        # Only connections that are open now can send.
         open_ids = [c for c in self.ctx.connections.configs() if self.ctx.connections.endpoint(c.id)]
         if not open_ids:
             show_error(self, "Replay", "Open a connection first.")

@@ -1,3 +1,12 @@
+"""Device Manager page: the inventory of target devices.
+
+Each device stores a name, host, port, transport and optional protocol
+decoder, used as defaults when connecting to it. The page is a table with
+Add / Edit / Delete; the editing itself happens in ``DeviceDialog`` and the
+saving in ``ctx.devices`` (the device service), so this file only wires the
+two together.
+"""
+
 from __future__ import annotations
 
 from PySide6.QtWidgets import QMessageBox, QPushButton, QTableView, QVBoxLayout, QWidget
@@ -21,6 +30,8 @@ class DevicesPage(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(18, 14, 18, 14)
         header = PageHeader("Device Manager", "Inventory of target devices and their default connection settings.")
+        # Header buttons. The object name gives the button its style: Primary (accent) or Danger
+        # (red).
         for text, slot, name in (("Add device", self.add_device, "Primary"), ("Edit", self.edit_selected, ""),
                                  ("Delete", self.delete_selected, "Danger")):
             button = QPushButton(text)
@@ -28,6 +39,8 @@ class DevicesPage(QWidget):
             button.clicked.connect(slot)
             header.actions.addWidget(button)
         layout.addWidget(header)
+        # Table columns: attribute of the Device dataclass, header text, and optional display
+        # formatting.
         self.model = RecordTableModel([
             Column("name", "Name"), Column("host", "Host"), Column("port", "Port"),
             Column("transport", "Transport", fmt=lambda t: t.label),
@@ -37,6 +50,7 @@ class DevicesPage(QWidget):
         self.view = QTableView()
         self.view.setModel(self.model)
         configure_table(self.view)
+        # Double-clicking a row is a shortcut for Edit.
         self.view.doubleClicked.connect(lambda _i: self.edit_selected())
         layout.addWidget(self.view, 1)
         self.refresh()
@@ -57,6 +71,7 @@ class DevicesPage(QWidget):
 
     def add_device(self) -> None:
         """Open the device dialog for a new device and save it if accepted."""
+        # None = a new device. The dialog offers the registered decoder names as protocol choices.
         dialog = DeviceDialog(None, self.ctx.protocols.names(), self)
         if dialog.exec():
             self._save_device(dialog.device)
@@ -77,6 +92,8 @@ class DevicesPage(QWidget):
             device: Device edited in the dialog.
         """
         try:
+            # The service validates and inserts or updates; errors (such as a duplicate name) are
+            # shown, not raised.
             self.ctx.devices.save(device)
         except Exception as exc:
             show_error(self, "Save device", exc)

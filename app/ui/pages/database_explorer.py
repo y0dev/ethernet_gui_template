@@ -35,6 +35,8 @@ from ..widgets.common import PageHeader, configure_table, section_label, show_er
 from ..widgets.table_editor import TableEditor, open_database_file
 
 
+# Read-only table model for the result of an arbitrary SQL query in the Saved queries tab (any
+# columns, any types).
 class SqlRowsModel(QAbstractTableModel):
     """Read-only grid over query results; BLOBs shown as a HEX preview."""
 
@@ -115,6 +117,8 @@ class SqlRowsModel(QAbstractTableModel):
         if role == Qt.ItemDataRole.DisplayRole:
             if isinstance(value, (bytes, memoryview)):
                 raw = bytes(value)
+                # Show a BLOB as its size and the first 32 bytes in hex, so large blobs do not slow
+                # the table down.
                 return f"<{len(raw)} B> {format_hex(raw[:32])}{' …' if len(raw) > 32 else ''}"
             return "NULL" if value is None else str(value)
         if role == Qt.ItemDataRole.ForegroundRole and value is None:
@@ -135,11 +139,14 @@ class DatabaseExplorerPage(QWidget):
         """
         super().__init__(parent)
         self.ctx = ctx
+        # A database file opened with "Open file…", or None while browsing the workbench database.
         self._external: Database | None = None
         layout = QVBoxLayout(self)
         layout.setContentsMargins(18, 14, 18, 14)
         header = PageHeader("Database Explorer", "Read-only view. Make an editable page with "
                                                  "python tools/new_page.py <key> \"<Title>\" --table <table>.")
+        # The lambda drops the "checked" argument of clicked, so open_file() is called with
+        # path=None and asks for a file.
         for text, slot, name in (("Open file…", self.open_file, ""), ("Workbench database", self.use_workbench_database, ""),
                                  ("Refresh", self.reload_tables, ""), ("Backup now", self.backup_database, "Primary")):
             button = QPushButton(text)
@@ -152,6 +159,8 @@ class DatabaseExplorerPage(QWidget):
         self.source_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         layout.addWidget(self.source_label)
 
+        # Tables tab: holds one read-only TableEditor, replaced whenever another database is shown.
+        # Saved queries tab: SavedQueriesPanel below.
         self.tables_tab = QWidget()
         self._tables_layout = QVBoxLayout(self.tables_tab)
         self._tables_layout.setContentsMargins(0, 6, 0, 0)
@@ -162,6 +171,8 @@ class DatabaseExplorerPage(QWidget):
         tabs.addTab(self.queries, "Saved queries")
         layout.addWidget(tabs, 1)
 
+        # When the Session Workflow switches database, follow it, unless the user is looking at an
+        # opened file.
         workflow = getattr(ctx, "workflow", None)
         if workflow is not None:
             workflow.database_changed.connect(lambda _p: self._external is None and self._show_database(ctx.db))
@@ -170,6 +181,7 @@ class DatabaseExplorerPage(QWidget):
     @property
     def current_database(self) -> Database:
         """Database being browsed: an opened file, or the workbench database."""
+        # The database the Tables tab is showing.
         return self._external or self.ctx.db
 
     def _show_database(self, db: Database) -> None:
@@ -179,6 +191,7 @@ class DatabaseExplorerPage(QWidget):
             db: Database to browse.
         """
         if self.browser is not None:
+            # Replace the table browser with a new one for the other database.
             self._tables_layout.removeWidget(self.browser)
             self.browser.deleteLater()
         self.browser = TableEditor(db, read_only=True)
@@ -197,10 +210,12 @@ class DatabaseExplorerPage(QWidget):
                                                   "SQLite database (*.db *.sqlite *.sqlite3);;All files (*)")
             if not path:
                 return
+        # Opening the workbench database itself is the same as the "Workbench database" button.
         if Path(path).resolve() == self.ctx.db.path.resolve():
             self.use_workbench_database()
             return
         try:
+            # Opened as-is: no migrations, no workbench tables added, journal mode untouched.
             db = open_database_file(path)
         except (OSError, sqlite3.DatabaseError) as exc:
             show_error(self, "Open database", exc)
@@ -244,6 +259,8 @@ class DatabaseExplorerPage(QWidget):
         self.reload_tables()
 
 
+# Query parameters are typed as text; pass numbers as numbers so comparisons with INTEGER/REAL
+# columns work.
 def _coerce_param_text(text: str) -> Any:
     """Convert parameter text to an SQL value.
 
@@ -265,6 +282,8 @@ def _coerce_param_text(text: str) -> Any:
     return text
 
 
+# Saved queries tab: list of named queries (left); SQL, parameter inputs, Run and results (right).
+# Always runs against the workbench database, read-only.
 class SavedQueriesPanel(QWidget):
     """Runs named queries from the .sql files (or edited SQL) read-only."""
 
@@ -341,6 +360,8 @@ class SavedQueriesPanel(QWidget):
         layout.setContentsMargins(0, 6, 0, 0)
         layout.addWidget(splitter)
 
+        # Choosing a query loads its SQL into the editor; any edit to the SQL rebuilds one input per
+        # :parameter.
         self.list.currentItemChanged.connect(lambda *_: self.show_query())
         self.editor.textChanged.connect(self._rebuild_param_inputs)
         self._param_edits: dict[str, QLineEdit] = {}
@@ -358,6 +379,8 @@ class SavedQueriesPanel(QWidget):
             q = library.get(name)
             item = QListWidgetItem(name)
             item.setToolTip(f"{q.description}\n{q.source}" + ("" if q.read_only else "\n(modifies data: not run here)"))
+            # Queries that modify data are listed but dimmed: the read-only connection would refuse
+            # them.
             if not q.read_only:
                 item.setForeground(QColor(theme.TEXT_DIM))
             self.list.addItem(item)
@@ -374,6 +397,8 @@ class SavedQueriesPanel(QWidget):
         """
         from ...core.database.sql_library import BUILTIN_DIR, SqlLibrary, SqlLibraryError
 
+        # Re-read the built-in queries plus the project folders. On an error the old library stays
+        # in use.
         extra = [d for d in self.ctx.db.sql.directories if d != BUILTIN_DIR]
         try:
             self.ctx.db.sql = SqlLibrary.load(extra)
@@ -393,12 +418,15 @@ class SavedQueriesPanel(QWidget):
                                  f"<br><span style='color:{theme.TEXT_DIM}'>{q.source}</span>")
         self.editor.setPlainText(q.sql)
         args = ", ".join(f"{p}=..." for p in q.parameters)
+        # Show the exact call to copy into Python code.
         self.python_call.setText(f'ctx.db.run("{q.name}"{", " + args if args else ""})')
 
     def _rebuild_param_inputs(self) -> None:
         """Recreate one input per ``:param`` in the editor, keeping typed values."""
         from ...core.database.sql_library import NamedQuery
 
+        # Works for typed ad-hoc SQL too. Values already typed are kept for parameters that still
+        # exist.
         names = NamedQuery("adhoc", self.editor.toPlainText()).parameters
         old = {k: e.text() for k, e in self._param_edits.items()}
         while self.params.rowCount():
@@ -421,8 +449,11 @@ class SavedQueriesPanel(QWidget):
         if not sql:
             return
         params = {name: _coerce_param_text(edit.text()) for name, edit in self._param_edits.items()}
+        # Captured packets are written to the database in batches; write the pending ones so the
+        # query sees them.
         self.ctx.capture.flush()
         try:
+            # Runs on a separate read-only connection, capped at 5000 rows.
             headers, rows = self.ctx.db.run_read_only(sql, params)
         except sqlite3.Error as exc:
             message = str(exc)

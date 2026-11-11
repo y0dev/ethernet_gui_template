@@ -1,3 +1,12 @@
+"""Dashboard page: a live overview of the whole application.
+
+Eight stat cards across the top (devices, connections, traffic, packets,
+recording state), then three tables: every connection with its counters,
+C-to-Python porting progress by status, and the most recent warnings and
+errors from the log. A one-second timer refreshes everything, but only while
+the page is visible, so it costs nothing in the background.
+"""
+
 from __future__ import annotations
 
 from collections import deque
@@ -26,6 +35,7 @@ class DashboardPage(QWidget):
         layout.setContentsMargins(18, 14, 18, 14)
         layout.addWidget(PageHeader("Dashboard", "Live overview of connections, capture and porting progress."))
 
+        # Top row: stat cards in a 4-column grid, keyed so refresh() can update each by name.
         grid = QGridLayout()
         grid.setSpacing(10)
         self.cards = {
@@ -40,9 +50,12 @@ class DashboardPage(QWidget):
             grid.addWidget(card, i // 4, i % 4)
         layout.addLayout(grid)
 
+        # Lower half: connections table on the left (wider), porting status and recent errors on the
+        # right.
         lower = QHBoxLayout()
         left = QVBoxLayout()
         left.addWidget(section_label("Connections"))
+        # One row per configured connection; the State column is coloured by connection state.
         self.conn_model = RecordTableModel([
             Column("name", "Name"), Column("transport", "Transport"),
             Column("state", "State", color=lambda s: theme.STATE_COLORS.get(s)),
@@ -56,6 +69,7 @@ class DashboardPage(QWidget):
 
         right = QVBoxLayout()
         right.addWidget(section_label("Porting status"))
+        # Number of C modules in each porting status (Not started, In progress, Verified, ...).
         self.porting_model = RecordTableModel([
             Column("status", "Status", color=lambda s: theme.PORTING_STATUS_COLORS.get(s)),
             Column("count", "Modules"),
@@ -65,6 +79,7 @@ class DashboardPage(QWidget):
         configure_table(pview)
         right.addWidget(pview)
         right.addWidget(section_label("Recent errors"))
+        # Filled by _remember_warning() from the application log.
         self.errors_model = RecordTableModel([
             Column("time", "Time", fmt=format_timestamp), Column("message", "Message"),
         ])
@@ -75,8 +90,12 @@ class DashboardPage(QWidget):
         lower.addLayout(right, 2)
         layout.addLayout(lower, 1)
 
+        # Keep the last 50 warnings/errors. The log emitter calls _remember_warning for every log
+        # record, even while the page is hidden.
         self._errors: deque[dict] = deque(maxlen=50)
         ctx.log_emitter.record_logged.connect(self._remember_warning)
+        # Poll the services once a second. Counters change with every packet, so polling is cheaper
+        # than reacting to each one.
         self._timer = QTimer(self)
         self._timer.setInterval(1000)
         self._timer.timeout.connect(self.refresh)
@@ -95,13 +114,16 @@ class DashboardPage(QWidget):
 
     def refresh(self) -> None:
         """Update the cards and tables from the services. Skipped while hidden."""
+        # Nothing to draw while another page is shown.
         if not self.isVisible():
             return
         ctx = self.ctx
         configs = ctx.connections.configs()
         rows = []
+        # Build the connection rows and add up the totals for the cards in the same pass.
         rx = tx = errors = active = 0
         for c in configs:
+            # The endpoint exists only while a connection is open; closed ones show zeros.
             ep = ctx.connections.endpoint(c.id)
             state = ctx.connections.state(c.id)
             active += state.is_active
@@ -123,6 +145,8 @@ class DashboardPage(QWidget):
         sid = ctx.capture.session_id
         self.cards["recording"].set_value(f"#{sid}" if sid else "Off", theme.ERROR if sid else None)
 
+        # Start every status at 0 so statuses with no modules still appear. Unknown status values in
+        # old databases are skipped.
         counts = {s: 0 for s in PortingStatus}
         for row in ctx.db.run("porting.status_counts"):
             try:

@@ -1,3 +1,15 @@
+"""Test Bench page: two ways of testing, in two tabs.
+
+*Device tests*: saved request/expected-response cases. Each case sends bytes
+on an open connection and passes only if the reply frame is byte-for-byte
+equal to the expected one (or, with no expected bytes, if nothing needs to
+come back). Running is asynchronous: ``ctx.tests`` sends, waits with a timer
+and reports through ``case_finished``, so the GUI never blocks.
+
+*Automated suites*: runs the project's pytest suites in a separate process
+and streams the output here; results are stored with the device test results.
+"""
+
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
@@ -25,9 +37,12 @@ from ..styles import theme
 from ..widgets.common import HexView, PageHeader, configure_table, show_error
 from ..widgets.table_models import Column, RecordTableModel, format_timestamp
 
+# Colour of the Status column in the results table.
 STATUS_COLORS = {"passed": theme.OK, "failed": theme.ERROR, "error": theme.ERROR, "skipped": theme.WARN}
 
 
+# Dialog for creating or editing one device test case. On Save, the parsed values are left in
+# self.values.
 class TestCaseDialog(QDialog):
     __test__ = False
 
@@ -48,8 +63,10 @@ class TestCaseDialog(QDialog):
         self.connection = QComboBox()
         for c in ctx.connections.configs():
             self.connection.addItem(c.name, c.id)
+        # Preselect the case's connection, or the first one for a new case.
         self.connection.setCurrentIndex(max(0, self.connection.findData(self.case.get("connection_id"))))
         self.request = QPlainTextEdit(format_hex(bytes(self.case.get("request") or b"")))
+        # Stored bytes are shown as hex; None (no expected reply) is shown as an empty box.
         self.expected = QPlainTextEdit(
             format_hex(bytes(self.case["expected_response"])) if self.case.get("expected_response") is not None else ""
         )
@@ -81,6 +98,7 @@ class TestCaseDialog(QDialog):
             self.values = dict(
                 name=self.name.text(), description=self.description.text(),
                 connection_id=self.connection.currentData(),
+                # Parse here so a typo is reported while the dialog is still open.
                 request=parse_hex(self.request.toPlainText()),
                 expected=parse_hex(self.expected.toPlainText()) if self.expected.toPlainText().strip() else None,
                 timeout_ms=self.timeout.value(),
@@ -103,6 +121,8 @@ class TestBenchPage(QWidget):
         """
         super().__init__(parent)
         self.ctx = ctx
+        # The TestRunner service does the sending, timing, comparing and storing; this page only
+        # shows it.
         self.runner = ctx.tests
         layout = QVBoxLayout(self)
         layout.setContentsMargins(18, 14, 18, 14)
@@ -114,6 +134,8 @@ class TestBenchPage(QWidget):
         tabs.addTab(self._build_device_tests_tab(), "Device tests")
         tabs.addTab(self._build_suite_tab(), "Automated suites")
         layout.addWidget(tabs, 1)
+        # Every finished case or suite refreshes the results table; suite output is appended as it
+        # arrives.
         self.runner.case_finished.connect(lambda *_: self.refresh_results())
         self.runner.suite_output.connect(self._append_suite_output)
         self.runner.suite_finished.connect(self._on_suite_finished)
@@ -130,6 +152,7 @@ class TestBenchPage(QWidget):
         page = QWidget()
         layout = QVBoxLayout(page)
         bar = QHBoxLayout()
+        # Toolbar: manage cases, then run the selected ones or all of them.
         for text, slot, name in (("New", self.new_case, "Primary"), ("Edit", self.edit_case, ""),
                                  ("Delete", self.delete_case, "Danger"), ("Run selected", self.run_selected_cases, ""),
                                  ("Run all", self.run_all_cases, "")):
@@ -139,9 +162,11 @@ class TestBenchPage(QWidget):
             bar.addWidget(b)
         bar.addStretch(1)
         layout.addLayout(bar)
+        # Saved cases on top, recent results (device tests and pytest runs) below.
         splitter = QSplitter(Qt.Orientation.Vertical)
         self.cases_model = RecordTableModel([
             Column("name", "Name"), Column("connection", "Connection"),
+            # Long payloads are cut to 80 characters in the table; the dialog shows them in full.
             Column("request", "Request", fmt=lambda b: format_hex(bytes(b or b""))[:80]),
             Column("expected_response", "Expected", fmt=lambda b: "(none)" if b is None else format_hex(bytes(b))[:80]),
             Column("timeout_ms", "Timeout ms"), Column("description", "Description"),
@@ -167,6 +192,7 @@ class TestBenchPage(QWidget):
 
     def refresh_cases(self) -> None:
         """Reload the test case table with connection names."""
+        # Cases store a connection id; show its name instead.
         names = {c.id: c.name for c in self.ctx.connections.configs()}
         rows = self.runner.cases.list_rows(order_by="name")
         for r in rows:
@@ -178,6 +204,8 @@ class TestBenchPage(QWidget):
         names = {r["id"]: r["name"] for r in self.runner.cases.list_rows()}
         rows = self.runner.results.recent(500)
         for r in rows:
+            # Device test results have no name of their own; use the case name (pytest results
+            # already have one).
             if not r["name"] and r["test_case_id"]:
                 r["name"] = names.get(r["test_case_id"], f"case {r['test_case_id']}")
         self.results_model.set_records(rows)
@@ -227,6 +255,8 @@ class TestBenchPage(QWidget):
     def run_selected_cases(self) -> None:
         """Run every selected test case."""
         for index in self.cases_view.selectionModel().selectedRows():
+            # run_case() returns immediately; results arrive later via case_finished. A case that is
+            # already running is skipped.
             self.runner.run_case(self.cases_model.record(index.row())["id"])
 
     def run_all_cases(self) -> None:
@@ -245,6 +275,7 @@ class TestBenchPage(QWidget):
         layout = QVBoxLayout(page)
         bar = QHBoxLayout()
         self.suite_target = QComboBox()
+        # Which pytest folder to run.
         for label, target in (("All tests", "tests"), ("Unit", "tests/unit"),
                               ("Integration", "tests/integration"), ("Compatibility (C reference)", "tests/compatibility")):
             self.suite_target.addItem(label, target)
@@ -267,6 +298,7 @@ class TestBenchPage(QWidget):
         """Start pytest on the chosen target, showing an error if a run is active."""
         self.output.clear()
         try:
+            # Starts pytest in a QProcess. Raises RuntimeError if a run is already in progress.
             self.runner.run_pytest(self.suite_target.currentData())
         except RuntimeError as exc:
             show_error(self, "Run tests", exc)
@@ -281,6 +313,7 @@ class TestBenchPage(QWidget):
         Args:
             text: New output text.
         """
+        # Append at the end even if the user clicked somewhere else in the output.
         self.output.moveCursor(self.output.textCursor().MoveOperation.End)
         self.output.insertPlainText(text)
 
@@ -291,6 +324,7 @@ class TestBenchPage(QWidget):
             summary: ``SuiteSummary`` of the finished run.
         """
         self.run_suite_button.setEnabled(True)
+        # Green only if nothing failed and pytest itself exited cleanly.
         ok = summary.failed == 0 and summary.errors == 0 and summary.exit_code == 0
         self.suite_status.setText(
             f"exit {summary.exit_code}: {summary.passed} passed, {summary.failed} failed, "

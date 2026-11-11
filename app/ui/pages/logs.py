@@ -1,3 +1,12 @@
+"""Application Logs page: every log record the application writes, live.
+
+Records arrive through ``ctx.log_emitter`` (a Qt logging handler) as dicts with
+timestamp, level, logger, message and a structured ``context``. The page keeps
+up to 20,000 of them in memory, shows the ones that pass the level and text
+filters, and shows the selected record as JSON underneath. *Load history*
+replaces the view with the most recent records stored in the database.
+"""
+
 from __future__ import annotations
 
 import json
@@ -21,6 +30,7 @@ from ..styles import theme
 from ..widgets.common import HexView, PageHeader, configure_table
 from ..widgets.table_models import Column, RecordTableModel, format_timestamp
 
+# Order matters: the "Minimum level" filter compares positions in this list.
 LEVELS = ["DEBUG", "INFO", "WARNING", "ERROR"]
 
 
@@ -48,6 +58,8 @@ class LogModel(RecordTableModel):
         Args:
             entry: Log record dict.
         """
+        # Full: drop the oldest row first. begin/endRemoveRows tell the view exactly what changed,
+        # so it does not redraw everything.
         if len(self.records) >= self.max_rows:
             self.beginRemoveRows(QModelIndex(), 0, 0)
             self.records.pop(0)
@@ -68,6 +80,8 @@ class LogsPage(QWidget):
         """
         super().__init__(parent)
         self.ctx = ctx
+        # Every kept record, filtered or not. The table model holds only the visible ones, so
+        # changing the filter can rebuild it from here.
         self._all: list[dict] = []
         layout = QVBoxLayout(self)
         layout.setContentsMargins(18, 14, 18, 14)
@@ -80,6 +94,7 @@ class LogsPage(QWidget):
         header.actions.addWidget(clear)
         layout.addWidget(header)
 
+        # Filter bar: minimum level, free-text search, and whether to scroll to new records.
         bar = QHBoxLayout()
         self.level = QComboBox()
         self.level.addItems(LEVELS)
@@ -94,6 +109,7 @@ class LogsPage(QWidget):
         bar.addWidget(self.follow)
         layout.addLayout(bar)
 
+        # Log table on top, JSON detail of the selected record below; the user can drag the divider.
         splitter = QSplitter(Qt.Orientation.Vertical)
         self.model = LogModel(parent=self)
         self.view = QTableView()
@@ -108,6 +124,8 @@ class LogsPage(QWidget):
         splitter.setSizes([500, 140])
         layout.addWidget(splitter, 1)
 
+        # New records arrive here from any thread via the log handler; filters rebuild the table
+        # when changed.
         ctx.log_emitter.record_logged.connect(self.add_record)
         self.level.currentTextChanged.connect(self._apply_filter)
         self.search.textChanged.connect(self._apply_filter)
@@ -135,11 +153,14 @@ class LogsPage(QWidget):
         Args:
             entry: Log record dict from the Qt log handler.
         """
+        # Keep the record even if it is filtered out now, but cap the list at the same size as the
+        # model.
         self._all.append(entry)
         if len(self._all) > self.model.max_rows:
             del self._all[: len(self._all) - self.model.max_rows]
         if self._passes_filter(entry):
             self.model.append(entry)
+            # Scrolling a hidden table is wasted work, so only follow while the page is shown.
             if self.follow.isChecked() and self.isVisible():
                 self.view.scrollToBottom()
 

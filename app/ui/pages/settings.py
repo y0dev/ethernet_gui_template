@@ -1,3 +1,12 @@
+"""Settings page: edit this machine's configuration (``data/config.json``).
+
+The form is generated from the ``AppConfig`` dataclass: one editor per field,
+chosen by the field's type (checkbox for bool, spin box for int, text for
+paths). Session Workflow settings and list/dict values are left out because
+the workflow page manages them. Saving validates a copy first, so a bad value
+never reaches the live configuration.
+"""
+
 from __future__ import annotations
 
 from dataclasses import fields
@@ -21,6 +30,7 @@ from ...context import AppContext
 from ...core.config import LOG_LEVELS, AppConfig, ConfigError
 from ..widgets.common import PageHeader, show_error
 
+# Friendly labels for the form. A field missing here is shown under its Python name.
 LABELS = {
     "database_path": "Database file",
     "backup_dir": "Backup directory",
@@ -56,10 +66,14 @@ class SettingsPage(QWidget):
         group = QGroupBox("Application")
         form = QFormLayout(group)
         self.editors: dict[str, QWidget] = {}
+        # Build the form from the dataclass, so a new AppConfig field appears here without changing
+        # this page.
         for f in fields(AppConfig):
             value = getattr(ctx.config, f.name)
             if isinstance(value, (dict, list)) or f.name.startswith("workflow_"):
                 continue  # edited in the Session Workflow page
+            # Pick an editor from the value type. bool is checked before int because bool is a
+            # subclass of int.
             if f.name == "log_level":
                 editor = QComboBox()
                 editor.addItems(LOG_LEVELS)
@@ -93,6 +107,7 @@ class SettingsPage(QWidget):
 
         Validation and save errors are shown in a dialog and nothing is applied.
         """
+        # Read every editor back into a plain dict of field name -> value.
         values = {}
         for name, editor in self.editors.items():
             if isinstance(editor, QComboBox):
@@ -104,12 +119,15 @@ class SettingsPage(QWidget):
             else:
                 values[name] = editor.text().strip()
         current = {f.name: getattr(self.ctx.config, f.name) for f in fields(AppConfig)}
+        # Validate a copy with the edits applied; the live config is only changed if this passes.
         candidate = AppConfig(**{**current, **values})
         try:
             candidate.validate()
         except ConfigError as exc:
             show_error(self, "Settings", exc)
             return
+        # Apply to the shared config object (other services hold the same instance), then write the
+        # JSON file.
         for name, value in values.items():
             setattr(self.ctx.config, name, value)
         try:
