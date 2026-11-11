@@ -1,11 +1,89 @@
+# Allowlist: everything is ignored, then only the files that belong in the
+# repository are allowed back in. A new kind of file (a new folder, or an
+# extension not listed here) must be added below before git will see it.
+#
+#   git check-ignore -v <file>    which rule ignores a file
+#   git status --ignored          everything that is being left out
+
+# --- 1. Ignore everything (but keep looking inside folders) ----------------
+*
+!*/
+
+# --- 2. Allowed files -------------------------------------------------------
+
+# Project root
+!/.gitignore
+!/README.md
+!/TEMPLATE.md
+!/main.py
+!/project.json
+!/pyproject.toml
+!/requirements*.txt
+
+# Application code and its SQL (queries and schema migrations)
+!/app/**/*.py
+!/app/**/*.sql
+
+# Your project: pages, queries, page templates, profiles
+!/plugins/*.py
+!/sql/*.sql
+!/page_templates/*.py.tmpl
+!/profiles/*.json
+
+# Resources: default config, command sets, icons
+!/resources/**/*.json
+!/resources/**/*.svg
+!/resources/**/*.png
+!/resources/**/*.ico
+
+# Documentation and screenshots
+!/docs/**/*.md
+!/docs/**/*.png
+!/docs/**/*.svg
+
+# Examples
+!/examples/**/*.md
+!/examples/**/*.py
+!/examples/**/*.c
+!/examples/**/*.h
+!/examples/**/*.json
+
+# Tests and their C reference sources
+!/tests/**/*.py
+!/tests/**/*.md
+!/tests/**/*.c
+!/tests/**/*.h
+
+# Tools and built-in page templates
+!/tools/*.py
+!/tools/page_templates/*.py.tmpl
+
+# Runtime folder: kept empty in git (databases, logs, reports, config.json)
+!/data/.gitkeep
+
+# --- 3. Never committed, even where step 2 allows the type ------------------
+
+# Folders git should not even look into
+/.venv/
+/venv/
+/env/
+/build/
+/dist/
+/.pytest_cache/
+/.ruff_cache/
+/.mypy_cache/
+/.tox/
+/.nox/
+/htmlcov/
+/.vscode/
+/.idea/
+/.claude/
 __pycache__/
-*.pyc
-.venv/
-.pytest_cache/
-.ruff_cache/
-.mypy_cache/
-data/*
-!data/.gitkeep
-*.so
-*.dll
-*.dylib
+*.egg-info/
+
+# Local experiments: name a file like this to keep it out of git
+/plugins/local_*.py
+*.local.json
+*_old.py
+/scratch/
+/tmp/

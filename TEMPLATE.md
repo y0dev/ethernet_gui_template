@@ -9,8 +9,17 @@ Everything you normally change lives in a few places:
 | Your database tables | `app/core/database/schema/NNNN_*.sql` |
 | Your pages | `plugins/*.py` |
 | Per-user runtime settings (paths, server IP/port, limits) | `data/config.json` (git-ignored, edited in Settings) |
+| Local experiments, never committed | `plugins/local_*.py`, `*.local.json`, `*_old.py`, `scratch/` (see `.gitignore`) |
 
 `project.json` is committed with your project; `data/config.json` is per machine.
+
+`.gitignore` is an allowlist: only the folders and file types it lists are
+committed. Add a line there when you add a new kind of file (see
+[the guides](docs/guides/README.md#where-things-live)).
+
+This file is the reference. For step-by-step walkthroughs with working code
+(a database page, your own page, device operations, decoders, branding), see
+the **[guides](docs/guides/README.md)**.
 
 ---
 

@@ -46,12 +46,21 @@ what order, plugins, SQL folders and colours. Named SQL queries live in
 `--list-templates`; add your own in `page_templates/`), pages that view and
 edit a table with `python tools/new_page.py <key> "<Title>" --table <name>
 [--database file.db]`, and tables with
-`python tools/new_migration.py "<what>"`. See **[TEMPLATE.md](TEMPLATE.md)**
-for adding, hiding and removing features.
+`python tools/new_migration.py "<what>"`.
 
-Coming from a C test console (a menu that sends commands to a device)?
-[examples/led_device](examples/led_device/README.md) turns such a menu into a
-Session Workflow, step by step, with a dummy device to try it on.
+Step-by-step guides ([all guides](docs/guides/README.md)):
+
+| I want to… | Guide |
+|---|---|
+| Rename the app, change its icon and colours, choose pages | [Branding and layout](docs/guides/branding-and-layout.md) |
+| Add a table and a page to view and edit it | [Set up a database page](docs/guides/database-page.md) |
+| Build a page of my own | [Build your own page](docs/guides/custom-page.md) |
+| Put my device's commands in the workflow menu | [Set up operations for your device](docs/guides/device-operations.md) |
+| See my frames as named fields | [Decode your device's frames](docs/guides/protocol-decoder.md) |
+| Turn a C console menu into a workflow | [examples/led_device](examples/led_device/README.md) |
+
+**[TEMPLATE.md](TEMPLATE.md)** is the reference for every option, and for
+removing a feature's code entirely.
 
 ## Requirements
 
@@ -138,6 +147,7 @@ embedded_workbench/
   resources/command_sets/    example command set for the simulator
   tests/
     unit/  integration/  compatibility/  fixtures/c_reference/
+  docs/guides/               step-by-step customisation guides
   docs/ARCHITECTURE.md  docs/PORTING_GUIDE.md
   resources/default_config.json
   data/                      runtime data (git-ignored)
