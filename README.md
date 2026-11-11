@@ -49,6 +49,10 @@ edit a table with `python tools/new_page.py <key> "<Title>" --table <name>
 `python tools/new_migration.py "<what>"`. See **[TEMPLATE.md](TEMPLATE.md)**
 for adding, hiding and removing features.
 
+Coming from a C test console (a menu that sends commands to a device)?
+[examples/led_device](examples/led_device/README.md) turns such a menu into a
+Session Workflow, step by step, with a dummy device to try it on.
+
 ## Requirements
 
 * Python 3.10+

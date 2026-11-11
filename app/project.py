@@ -43,6 +43,8 @@ class ProjectProfile:
     sql_dirs: list[str] = field(default_factory=lambda: ["sql"])
     #: colour overrides, see app/ui/styles/theme.py THEME_KEYS
     theme: dict[str, str] = field(default_factory=dict)
+    #: window / taskbar icon (.svg, .png or .ico), relative to the project root
+    icon: str = "resources/icons/app.svg"
     source: str = ""
 
     def validate(self) -> None:
@@ -63,8 +65,23 @@ class ProjectProfile:
             value = getattr(self, name)
             if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
                 raise ProjectError(f"{name} must be a list of strings")
+        if not isinstance(self.icon, str):
+            raise ProjectError("icon must be a file path (string)")
         if not isinstance(self.theme, dict):
             raise ProjectError("theme must be an object of colour overrides")
+
+    def icon_path(self) -> Path | None:
+        """Resolve ``icon`` to an absolute path.
+
+        Relative paths are taken relative to the project root.
+
+        Returns:
+            The icon file, or None when ``icon`` is empty (use Qt's default).
+        """
+        if not self.icon.strip():
+            return None
+        path = Path(self.icon).expanduser()
+        return path if path.is_absolute() else PROJECT_ROOT / path
 
     def sql_paths(self) -> list[Path]:
         """Resolve ``sql_dirs`` into absolute paths.

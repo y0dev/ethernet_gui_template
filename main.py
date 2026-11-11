@@ -17,6 +17,7 @@ import sys
 from pathlib import Path
 
 from PySide6.QtCore import QTimer
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 ROOT = Path(__file__).resolve().parent
@@ -25,7 +26,7 @@ if str(ROOT) not in sys.path:  # so plugins/ can be imported as "plugins.<name>"
 
 from app.context import AppContext  # noqa: E402
 from app.core.config import ConfigError, config_path, load_config  # noqa: E402
-from app.project import ProjectError, load_project, project_path  # noqa: E402
+from app.project import ProjectError, ProjectProfile, load_project, project_path  # noqa: E402
 from app.ui.main_window import MainWindow  # noqa: E402
 from app.ui.registry import PageRegistry  # noqa: E402
 from app.ui.styles import theme  # noqa: E402
@@ -52,6 +53,39 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     return args
 
 
+def apply_app_icon(app: QApplication, profile: ProjectProfile) -> QIcon | None:
+    """Set the profile's icon on every window and, on Windows, the taskbar.
+
+    Windows groups a Python program under the Python icon unless the process
+    has its own AppUserModelID, so one is set from the organization and
+    application name.  A missing or unreadable icon is logged, not fatal.
+
+    Args:
+        app: Running Qt application.
+        profile: Project profile naming the icon.
+
+    Returns:
+        The icon that was applied, or None if none was.
+    """
+    path = profile.icon_path()
+    if path is None:
+        return None
+    icon = QIcon(str(path)) if path.is_file() else QIcon()
+    if icon.isNull():
+        log.warning("application icon not found or unreadable", extra={"context": {"path": str(path)}})
+        return None
+    app.setWindowIcon(icon)
+    if sys.platform == "win32":
+        try:
+            import ctypes
+
+            app_id = f"{profile.organization}.{profile.app_name}".replace(" ", "")
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(app_id)
+        except (AttributeError, OSError):
+            log.debug("could not set the Windows AppUserModelID")
+    return icon
+
+
 def main(argv: list[str] | None = None) -> int:
     """Start the workbench GUI and run the Qt event loop.
 
@@ -75,6 +109,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     app.setApplicationName(profile.app_name)
     app.setOrganizationName(profile.organization)
+    apply_app_icon(app, profile)
     theme.apply_theme(app)
 
     cfg_file = config_path(args.config)

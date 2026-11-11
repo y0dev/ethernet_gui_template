@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 64 64">
+  <title>Embedded Systems Workbench</title>
+  <!-- tile: theme background -->
+  <rect x="2" y="2" width="60" height="60" rx="13" fill="#1a2029" stroke="#2e3846" stroke-width="2"/>
+  <!-- chip pins -->
+  <g stroke="#3d8bfd" stroke-width="3" stroke-linecap="round">
+    <path d="M24 9v6M32 9v6M40 9v6M24 49v6M32 49v6M40 49v6M9 24h6M9 32h6M9 40h6M49 24h6M49 32h6M49 40h6"/>
+  </g>
+  <!-- chip body -->
+  <rect x="16" y="16" width="32" height="32" rx="5" fill="#212935" stroke="#3d8bfd" stroke-width="3"/>
+  <!-- signal trace across the chip -->
+  <path d="M19 33h6l3-8 5 15 4-11 2 4h6" fill="none" stroke="#2fbf71" stroke-width="3"
+        stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

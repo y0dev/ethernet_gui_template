@@ -489,3 +489,30 @@ def test_table_option_generates_an_editing_page_for_another_database(qtbot, tmp_
     with sqlite3.connect(plant) as conn:
         assert conn.execute("SELECT value FROM readings").fetchone()[0] == 2.5
         assert [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")] == ["readings"]
+
+
+def test_app_icon_from_project_profile(qtbot, tmp_path):
+    """The profile's icon is applied to the application; missing or empty icons fall back quietly.
+
+    Args:
+        qtbot: pytest-qt robot fixture.
+        tmp_path: pytest temporary directory.
+    """
+    from PySide6.QtWidgets import QApplication
+
+    import main
+    from app.project import ProjectProfile
+
+    profile = load_project(ROOT / "project.json")
+    assert profile.icon_path().is_file()
+    app = QApplication.instance()
+    icon = main.apply_app_icon(app, profile)
+    assert icon is not None and not icon.isNull() and not app.windowIcon().isNull()
+    assert icon.pixmap(16, 16).width() == 16                      # the SVG renders at taskbar size
+
+    assert main.apply_app_icon(app, ProjectProfile(icon=str(tmp_path / "missing.png"))) is None
+    assert ProjectProfile(icon="").icon_path() is None
+    path = tmp_path / "p.json"
+    path.write_text(json.dumps({"icon": 5}))
+    with pytest.raises(ProjectError, match="icon"):
+        load_project(path)

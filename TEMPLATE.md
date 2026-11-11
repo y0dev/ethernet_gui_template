@@ -4,7 +4,7 @@ Everything you normally change lives in a few places:
 
 | What | Where |
 |---|---|
-| Name, pages, page order, start page, plugins, SQL folders, colours | `project.json` |
+| Name, icon, pages, page order, start page, plugins, SQL folders, colours | `project.json` |
 | Your SQL queries | `sql/*.sql` |
 | Your database tables | `app/core/database/schema/NNNN_*.sql` |
 | Your pages | `plugins/*.py` |
@@ -14,13 +14,14 @@ Everything you normally change lives in a few places:
 
 ---
 
-## 1. Rename and re-colour
+## 1. Rename, re-colour and change the icon
 
 ```json
 {
   "app_name": "Acme Gateway Bench",
   "app_subtitle": "production test",
   "organization": "Acme",
+  "icon": "resources/icons/acme.svg",
   "theme": { "accent": "#ff8a00", "ok": "#22c55e", "background": "#101418" }
 }
 ```
@@ -28,6 +29,13 @@ Everything you normally change lives in a few places:
 Theme keys: `background, panel, input, border, text, text_dim, accent,
 accent_dim, ok, warning, error, rx, tx`. Invalid keys or colours stop start-up
 with a clear message. Also rename `name` in `pyproject.toml` if you publish it.
+
+`icon` is the window and taskbar icon: an `.svg`, `.png` or `.ico` file,
+relative to the project root. The default is `resources/icons/app.svg`; an
+empty string uses Qt's default icon. SVG stays sharp at every size. On
+Windows the app registers its own taskbar identity (from `organization` and
+`app_name`), so the taskbar shows your icon instead of Python's. A missing
+icon file is logged and the app still starts.
 
 ## 2. Hide, reorder or choose the start page
 

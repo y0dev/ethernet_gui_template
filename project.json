@@ -3,6 +3,8 @@
   "app_name": "Embedded Systems Workbench",
   "app_subtitle": "comms · capture · porting",
   "organization": "EmbeddedWorkbench",
+  "_icon": "Window and taskbar icon (.svg, .png or .ico), relative to the project root. Empty = Qt default.",
+  "icon": "resources/icons/app.svg",
 
   "_pages": "Navigation order. Remove a key to hide that page. Built-ins: workflow, dashboard, devices, connections, packet_monitor, test_bench, porting, database, logs, settings. Plugin pages not listed here are appended at the end.",
   "pages": [

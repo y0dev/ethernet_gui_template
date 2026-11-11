@@ -1,0 +1,102 @@
+{
+  "description": "DUMMY EXAMPLE for examples/led_device (console_menu.c, led_device_sim.py). Start the workflow server with framing {\"type\": \"length_prefixed\", \"length_size\": 1, \"byte_order\": \"big\", \"length_offset\": 0, \"length_adjust\": 1}.",
+  "framing": {
+    "type": "length_prefixed",
+    "length_size": 1,
+    "byte_order": "big",
+    "length_offset": 0,
+    "length_adjust": 1
+  },
+  "operations": [
+    {
+      "name": "Ping",
+      "category": "Connectivity",
+      "description": "Menu 1: liveness check",
+      "payload_format": "hex",
+      "payload": "01 12",
+      "match": "exact",
+      "expected": "81",
+      "timeout_ms": 1000
+    },
+    {
+      "name": "Send device info",
+      "category": "Identification",
+      "description": "Menu 2: serial number and firmware",
+      "payload_format": "hex",
+      "payload": "02 1B",
+      "match": "prefix",
+      "expected": "82 53 4E 3D",
+      "timeout_ms": 1000
+    },
+    {
+      "name": "LED on",
+      "category": "LED",
+      "description": "Menu 3",
+      "payload_format": "hex",
+      "payload": "10 01 86",
+      "match": "exact",
+      "expected": "90 01",
+      "timeout_ms": 1000
+    },
+    {
+      "name": "LED off",
+      "category": "LED",
+      "description": "Menu 4",
+      "payload_format": "hex",
+      "payload": "10 00 81",
+      "match": "exact",
+      "expected": "90 00",
+      "timeout_ms": 1000
+    },
+    {
+      "name": "Blink LED x3",
+      "category": "LED",
+      "description": "Menu 5: 3 blinks, 250 ms period",
+      "payload_format": "hex",
+      "payload": "11 03 19 83",
+      "match": "exact",
+      "expected": "91 00",
+      "timeout_ms": 2000
+    },
+    {
+      "name": "Blink LED x10",
+      "category": "LED",
+      "description": "Not in the C menu: same command, other values",
+      "payload_format": "hex",
+      "payload": "11 0A 0A 47",
+      "match": "exact",
+      "expected": "91 00",
+      "timeout_ms": 2000
+    },
+    {
+      "name": "Read temperature",
+      "category": "Diagnostics",
+      "description": "Menu 6: int16 big-endian, 0.1 degC",
+      "payload_format": "hex",
+      "payload": "20 F5",
+      "match": "prefix",
+      "expected": "A0",
+      "timeout_ms": 1000
+    },
+    {
+      "name": "Reset",
+      "category": "Maintenance",
+      "description": "Menu 7: the device does not answer",
+      "payload_format": "hex",
+      "payload": "30 85",
+      "match": "none",
+      "expected": "",
+      "timeout_ms": 1000
+    },
+    {
+      "name": "Unknown command (expect error)",
+      "category": "Diagnostics",
+      "description": "Checks the device rejects bad commands",
+      "payload_format": "hex",
+      "payload": "7F 6F",
+      "match": "exact",
+      "expected": "FF 7F",
+      "timeout_ms": 1000
+    }
+  ]
+}
