@@ -366,9 +366,46 @@ def _exercise_page(template: str, page) -> None:
     elif template == "db_table":
         assert page.editor is not None and page.editor.chooser.count() == 0     # only workbench tables exist
         assert "no tables of its own" in page.editor.status.text()
+    elif template == "workflow":
+        page.go_to(1)
+        assert page.stack.currentIndex() == 0 and "run name" in page.hint.text()   # locked until set up
+        page.steps[0].name.setText("Bring-up")
+        page.go_to(1)
+        page.steps[1].run()
+        page.go_to(2)
+        assert page.stack.currentIndex() == 2 and "Runs completed: 1" in page.steps[2].summary.text()
+    elif template.startswith("menu_"):
+        # no hook modules and no server in this context: an empty menu that says what to do
+        assert page.options == [] and "Start the server" in page.status.text()
+        page.set_targets([])
+        assert page.ticked_peers() == []
+    elif template == "device_workflow":
+        import socket
+
+        page.go_to(1)
+        assert page.stack.currentIndex() == 0                                    # locked until the server runs
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            port = probe.getsockname()[1]
+        server = page.steps[0]
+        server.host.setText("127.0.0.1")
+        server.port.setValue(port)
+        server.start()
+        assert server.is_done() and "Listening" in server.status.text()
+        page.go_to(1)
+        page.steps[1].start_session()
+        assert page.steps[1].is_done()
+        page.go_to(2)
+        assert page.stack.currentIndex() == 2 and "no operations yet" in page.steps[2].operations.item(0).text()
+        page.go_to(3)
+        assert "no results yet" in page.steps[3].summary.text()
+        page.ctx.workflow.end_session()
+        page.ctx.workflow.stop_server()
 
 
-@pytest.mark.parametrize("template", ["table", "blank", "query_form", "live_packets", "device_console", "db_table"])
+@pytest.mark.parametrize("template", ["table", "blank", "query_form", "live_packets", "device_console", "db_table",
+                                      "workflow", "device_workflow", "menu_console", "menu_buttons", "menu_form",
+                                      "menu_sequence"])
 def test_every_builtin_page_template_works(qtbot, tmp_path, template):
     """Each built-in template generates a page that loads, opens and does its job.
 

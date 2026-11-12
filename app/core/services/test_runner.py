@@ -11,6 +11,7 @@ Results are only ever recorded from tests that actually ran.
 from __future__ import annotations
 
 import logging
+import shutil
 import sys
 import tempfile
 import time
@@ -21,13 +22,35 @@ from typing import Any
 
 from PySide6.QtCore import QObject, QProcess, QTimer, Signal
 
-from ..config import PROJECT_ROOT
+from ..config import FROZEN, PROJECT_ROOT
 from ..database import Database, TestCaseRepository, TestResultRepository
 from ..hexutil import format_hex
 from ..models import Direction, Packet
 from .connection_manager import ConnectionManager
 
 log = logging.getLogger(__name__)
+
+
+def _python_interpreter() -> str:
+    """Return the Python interpreter that runs the pytest suites.
+
+    From source this is the running interpreter. A packaged executable has no
+    pytest inside it, so it uses a Python installation found on ``PATH``.
+
+    Returns:
+        Path or command name of the interpreter.
+
+    Raises:
+        RuntimeError: If the application is packaged and no Python is on ``PATH``.
+    """
+    if not FROZEN:
+        return sys.executable
+    for name in ("python", "python3", "py"):
+        found = shutil.which(name)
+        if found:
+            return found
+    raise RuntimeError("Running the pytest suites needs Python with pytest installed on PATH; "
+                       "this packaged build does not include them.")
 
 
 @dataclass
@@ -245,6 +268,7 @@ class TestRunner(QObject):
         """
         if self._process is not None:
             raise RuntimeError("a test run is already in progress")
+        python = _python_interpreter()
         if self._finished_process is not None:
             # Released here rather than with deleteLater() inside its own
             # finished() handler: deleting a QProcess from within its signal
@@ -267,7 +291,7 @@ class TestRunner(QObject):
             f"--basetemp={self._junit.parent / 'tmp'}", *(extra_args or []),
         ]
         log.info("starting pytest", extra={"context": {"args": args}})
-        process.start(sys.executable, args)
+        process.start(python, args)
 
     def _read_suite_output(self) -> None:
         """Forward the child process's new output through ``suite_output``."""

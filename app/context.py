@@ -40,6 +40,10 @@ class AppContext:
     tests: TestRunner
     operations: OperationRunner = field(init=False)
     workflow: WorkflowService = field(init=False)
+    #: modules offering Operations Menu options (project.json -> menu_hooks)
+    menu_hooks: list[str] = field(default_factory=list)
+    #: what step 4 of the Session Workflow shows (project.json -> workflow_operations)
+    workflow_operations: str = "operations"
     _log_handlers: list[logging.Handler] = field(default_factory=list)
 
     @classmethod

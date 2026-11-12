@@ -20,6 +20,7 @@ from __future__ import annotations
 import logging
 import time
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -42,6 +43,8 @@ class _Job:
     device_name: str
     session_id: int
     started: float = 0.0
+    #: called with the stored result row when this job finishes
+    on_result: Callable[[dict[str, Any]], None] | None = None
 
 
 @dataclass
@@ -80,6 +83,7 @@ class OperationRunner(QObject):
         operations: list[DeviceOperation],
         session_id: int,
         device_name: str = "",
+        on_result: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         """Queue operations, in order, for one device and start the first if idle.
 
@@ -89,6 +93,9 @@ class OperationRunner(QObject):
             operations: Operations to run in order.
             session_id: Session the results are stored under.
             device_name: Name stored with the results; defaults to ``peer``.
+            on_result: Called with each operation's result row when it
+                finishes, after ``result_ready`` (used by menu hooks to wait
+                for their own reply).
 
         Raises:
             ValueError: If any operation is invalid; nothing is queued.
@@ -99,7 +106,7 @@ class OperationRunner(QObject):
             self._framers.pop(connection_id, None)  # pick up framing changes
         queue = self._queues.setdefault((connection_id, peer), _DeviceQueue())
         for op in operations:
-            queue.jobs.append(_Job(op, device_name or peer, session_id))
+            queue.jobs.append(_Job(op, device_name or peer, session_id, on_result=on_result))
         self._emit_queue_size()
         self._start_next_job((connection_id, peer))
 
@@ -154,6 +161,18 @@ class OperationRunner(QObject):
             if (connection_id is None or key[0] == connection_id) and (peer is None or key[1] == peer):
                 total += len(queue.jobs) + (queue.active is not None)
         return total
+
+    def unwrap(self, connection_id: int, frame: bytes) -> bytes:
+        """Remove a connection's framing from a received frame.
+
+        Args:
+            connection_id: Connection the frame came from.
+            frame: Complete received frame, as stored in a result row.
+
+        Returns:
+            The payload the match rules see.
+        """
+        return self._strip_framing(connection_id, frame)
 
     # -- internals --------------------------------------------------------
     def _emit_queue_size(self) -> None:
@@ -283,6 +302,11 @@ class OperationRunner(QObject):
             extra={"context": {"device": job.device_name, "operation": job.operation.name, "status": status}},
         )
         self.result_ready.emit(row)
+        if job.on_result is not None:
+            try:
+                job.on_result(row)
+            except Exception:
+                log.exception("operation result callback failed")
         self._emit_queue_size()
         # Next operation for this device after the current signal unwinds.
         QTimer.singleShot(0, lambda k=key: self._start_next_job(k))

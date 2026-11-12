@@ -11,7 +11,10 @@ All logic lives in WorkflowService; this module only presents it.
 
 from __future__ import annotations
 
+import importlib
+import inspect
 import json
+import logging
 import time
 from pathlib import Path
 
@@ -59,7 +62,10 @@ from ...core.services import WorkflowError
 from ..dialogs.editors import FramingEditor
 from ..styles import theme
 from ..widgets.common import PageHeader, StatusDot, configure_table, section_label, show_error
+from ..widgets.table_editor import TableEditor
 from ..widgets.table_models import Column, RecordTableModel, format_timestamp
+
+log = logging.getLogger(__name__)
 
 # Step titles in order; their index is the step number used by go_to(), step_done() and
 # step_blocker().
@@ -266,9 +272,14 @@ class DatabaseStep(QWidget):
         open_button.clicked.connect(self.open_existing)
         new_button = QPushButton("Create new…")
         new_button.clicked.connect(self.create_new)
+        # Read-only browser of every table in the selected database (sessions, packets, results, …).
+        view_button = QPushButton("View contents…")
+        view_button.setToolTip("Browse the tables and rows stored in the selected database")
+        view_button.clicked.connect(self.view_contents)
+        self.contents_dialog: QDialog | None = None
         # When ticked, the chosen file becomes database_path in data/config.json.
         self.make_default = QCheckBox("Open this database automatically at startup")
-        for w in (use, open_button, new_button):
+        for w in (use, open_button, new_button, view_button):
             row.addWidget(w)
         row.addSpacing(12)
         row.addWidget(self.make_default)
@@ -283,6 +294,7 @@ class DatabaseStep(QWidget):
         layout.addWidget(self.recent, 1)
         layout.addWidget(_hint_label("Double-click a recent database to open it."))
         self.wf.database_changed.connect(lambda _p: self.refresh())
+        self.wf.database_changed.connect(lambda _p: self._close_contents())
         self.wf.session_changed.connect(lambda _s: self.refresh())
         self.refresh()
 
@@ -339,6 +351,42 @@ class DatabaseStep(QWidget):
             if not path.lower().endswith((".db", ".sqlite", ".sqlite3")):
                 path += ".db"
             self._open_database(path)
+
+    def view_contents(self) -> None:
+        """Open a read-only browser of the selected database's tables and rows.
+
+        The window stays open beside the workflow (use Refresh in it to see new
+        rows while a session records) and closes when the database is switched.
+        """
+        if self.contents_dialog is not None:
+            self.contents_dialog.raise_()
+            self.contents_dialog.activateWindow()
+            return
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f"Database contents: {self.ctx.db.path.name}")
+        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        dialog.resize(1000, 600)
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(_hint_label(f"{self.ctx.db.path}: pick a table to see its rows. "
+                                     "Read-only; edit tables on the Database Explorer page."))
+        editor = TableEditor(self.ctx.db, read_only=True, parent=dialog)
+        # List every table in the file, whichever tables it has; the "Show workbench tables"
+        # switch only matters on the Database Explorer, so it is hidden here.
+        editor.show_workbench.setChecked(True)
+        editor.show_workbench.hide()
+        editor.chooser.setCurrentText("sessions")
+        layout.addWidget(editor, 1)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.rejected.connect(dialog.close)
+        layout.addWidget(buttons)
+        dialog.destroyed.connect(lambda _o=None: setattr(self, "contents_dialog", None))
+        self.contents_dialog = dialog
+        dialog.show()
+
+    def _close_contents(self) -> None:
+        """Close the contents browser, which would otherwise show the previous database."""
+        if self.contents_dialog is not None:
+            self.contents_dialog.close()
 
     def _open_database(self, path: str) -> None:
         """Switch the workflow to a database file, showing any error.
@@ -545,7 +593,10 @@ class DevicesStep(QWidget):
         title = menu.addAction(f"{len(peers)} device(s) selected")
         title.setEnabled(False)
         ops_menu = menu.addMenu("Run operation")
-        ops = self.wf.list_operations()
+        step = self.page.operations_step
+        # Step 4 is either the fixed operations or the menu hooks; list whichever it shows.
+        hooks = getattr(step, "options", None)
+        ops = hooks if hooks is not None else self.wf.list_operations()
         if not ops:
             empty = ops_menu.addAction("(no operations defined, see step 4)")
             empty.setEnabled(False)
@@ -556,9 +607,12 @@ class DevicesStep(QWidget):
             if sub is None:
                 sub = ops_menu.addMenu(op.category)
                 categories[op.category] = sub
-            action = QAction(op.name, sub)
+            action = QAction(op.title if hooks is not None else op.name, sub)
             action.setToolTip(op.description)
-            action.triggered.connect(lambda _c=False, o=op: self.page.operations_step.run_operations(connected, [o]))
+            if hooks is not None:
+                action.triggered.connect(lambda _c=False, o=op: (step.set_targets(connected), step.run_option(o)))
+            else:
+                action.triggered.connect(lambda _c=False, o=op: step.run_operations(connected, [o]))
             sub.addAction(action)
         # Operations can run only on connected devices and only while a session records the results.
         ops_menu.setEnabled(bool(connected) and self.wf.session_id is not None)
@@ -1291,6 +1345,37 @@ class ReportStep(QWidget):
 # =============================================================================
 # Page
 # =============================================================================
+def operations_step_for(ctx: AppContext) -> QWidget:
+    """Build step 4 as chosen by ``ctx.workflow_operations``.
+
+    ``"operations"`` is the fixed-operations step above, ``"menu"`` the
+    Operations Menu page, and ``"module:Class"`` any page class, for example
+    one generated from a ``menu_*`` page template. A page that accepts
+    ``embedded`` gets ``embedded=True``. A page that cannot be loaded is
+    reported in the log and the fixed-operations step is used instead.
+
+    Args:
+        ctx: Application context.
+
+    Returns:
+        The step widget.
+    """
+    choice = ctx.workflow_operations
+    if choice == "operations":
+        return OperationsStep(ctx)
+    target = "app.ui.pages.operations_menu:OperationsMenuPage" if choice == "menu" else choice
+    module_name, _, class_name = target.partition(":")
+    try:
+        page_class = getattr(importlib.import_module(module_name), class_name)
+        if "embedded" in inspect.signature(page_class).parameters:
+            return page_class(ctx, embedded=True)
+        return page_class(ctx)
+    except Exception:
+        log.exception("workflow step 4 could not be loaded; using the operations step",
+                      extra={"context": {"workflow_operations": choice}})
+        return OperationsStep(ctx)
+
+
 # The page itself: a step bar at the top, the five step widgets in a stack (one visible at a time),
 # and Back / Next at the bottom. It also decides which steps are unlocked.
 class WorkflowPage(QWidget):
@@ -1339,7 +1424,8 @@ class WorkflowPage(QWidget):
         self.server_step = ServerStep(ctx)
         self.database_step = DatabaseStep(ctx)
         self.devices_step = DevicesStep(ctx, self)
-        self.operations_step = OperationsStep(ctx)
+        # Step 4: chosen by project.json -> workflow_operations (see docs/guides/menu-hooks.md).
+        self.operations_step = operations_step_for(ctx)
         self.report_step = ReportStep(ctx, self)
         for w in (self.server_step, self.database_step, self.devices_step, self.operations_step, self.report_step):
             self.stack.addWidget(w)

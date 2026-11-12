@@ -20,7 +20,8 @@ from PySide6.QtCore import QTimer
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QMessageBox
 
-ROOT = Path(__file__).resolve().parent
+# Packaged builds look for plugins/ next to the executable, not inside the bundle.
+ROOT = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:  # so plugins/ can be imported as "plugins.<name>"
     sys.path.insert(0, str(ROOT))
 
@@ -120,6 +121,8 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     ctx = AppContext.create(config, cfg_file, app, sql_dirs=profile.sql_paths())
+    ctx.menu_hooks = list(profile.menu_hooks)
+    ctx.workflow_operations = profile.workflow_operations
     registry = PageRegistry()
     problems = registry.load_plugins(profile.plugins)
     for hook in registry.startup_hooks:

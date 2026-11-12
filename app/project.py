@@ -23,6 +23,8 @@ from .core.config import PROJECT_ROOT
 log = logging.getLogger(__name__)
 
 DEFAULT_PROJECT_FILE = PROJECT_ROOT / "project.json"
+#: allowed values of ``workflow_operations``
+WORKFLOW_OPERATIONS = ("operations", "menu")
 
 
 class ProjectError(ValueError):
@@ -39,6 +41,11 @@ class ProjectProfile:
     start_page: str = ""
     #: importable modules with a ``register(registry)`` function
     plugins: list[str] = field(default_factory=list)
+    #: importable modules with @menu_option functions for the Operations Menu page
+    menu_hooks: list[str] = field(default_factory=list)
+    #: what step 4 of the Session Workflow shows: "operations" (fixed operations), "menu" (menu
+    #: hooks) or "module:Class" for a page of your own, e.g. "plugins.my_menu:MyMenuPage"
+    workflow_operations: str = "operations"
     #: folders with named-query ``.sql`` files (after the built-ins)
     sql_dirs: list[str] = field(default_factory=lambda: ["sql"])
     #: colour overrides, see app/ui/styles/theme.py THEME_KEYS
@@ -61,10 +68,15 @@ class ProjectProfile:
             duplicates = {p for p in self.pages if self.pages.count(p) > 1}
             if duplicates:
                 raise ProjectError(f"pages lists {sorted(duplicates)} more than once")
-        for name in ("plugins", "sql_dirs"):
+        for name in ("plugins", "menu_hooks", "sql_dirs"):
             value = getattr(self, name)
             if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
                 raise ProjectError(f"{name} must be a list of strings")
+        value = self.workflow_operations
+        module, _, cls = value.partition(":") if isinstance(value, str) else ("", "", "")
+        if value not in WORKFLOW_OPERATIONS and not (module and cls.isidentifier()):
+            raise ProjectError(f"workflow_operations must be one of {list(WORKFLOW_OPERATIONS)} "
+                               "or a page class as \"module:Class\"")
         if not isinstance(self.icon, str):
             raise ProjectError("icon must be a file path (string)")
         if not isinstance(self.theme, dict):

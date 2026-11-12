@@ -15,13 +15,20 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sys
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any
 
 log = logging.getLogger(__name__)
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+#: True when running as a packaged executable (see tools/build_exe.py).
+FROZEN = bool(getattr(sys, "frozen", False))
+
+# The project root holds project.json, plugins/, sql/, resources/ and data/.
+# From source it is the repository; in a packaged build it is the folder that
+# contains the executable, so those files stay editable next to it.
+PROJECT_ROOT = Path(sys.executable).resolve().parent if FROZEN else Path(__file__).resolve().parents[2]
 DEFAULTS_FILE = PROJECT_ROOT / "resources" / "default_config.json"
 DEFAULT_CONFIG_FILE = PROJECT_ROOT / "data" / "config.json"
 

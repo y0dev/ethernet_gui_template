@@ -31,6 +31,7 @@ PageFactory = Callable[[Any], QWidget]
 #: (key, navigation title, "module:Class") in default order
 BUILTIN_PAGES: tuple[tuple[str, str, str], ...] = (
     ("workflow", "Session Workflow", "app.ui.pages.workflow:WorkflowPage"),
+    ("operations_menu", "Operations Menu", "app.ui.pages.operations_menu:OperationsMenuPage"),
     ("dashboard", "Dashboard", "app.ui.pages.dashboard:DashboardPage"),
     ("devices", "Device Manager", "app.ui.pages.devices:DevicesPage"),
     ("connections", "Network Connections", "app.ui.pages.connections:ConnectionsPage"),
