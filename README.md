@@ -57,6 +57,7 @@ Step-by-step guides ([all guides](docs/guides/README.md)):
 | Build a page of my own | [Build your own page](docs/guides/custom-page.md) |
 | Put my device's commands in the workflow menu | [Set up operations for your device](docs/guides/device-operations.md) |
 | See my frames as named fields | [Decode your device's frames](docs/guides/protocol-decoder.md) |
+| Package it as an `.exe` that runs without Python | [Build a standalone executable](docs/guides/build-executable.md) |
 | Turn a C console menu into a workflow | [examples/led_device](examples/led_device/README.md) |
 
 **[TEMPLATE.md](TEMPLATE.md)** is the reference for every option, and for

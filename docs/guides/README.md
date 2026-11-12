@@ -10,6 +10,7 @@ files to change, shows working code, and ends with what to check.
 | Build a page of my own (layout, services, widgets, renaming, removing) | [Build your own page](custom-page.md) |
 | Put my device's commands in the Session Workflow menu | [Set up operations for your device](device-operations.md) |
 | See my frames as named fields in the Packet Monitor | [Decode your device's frames](protocol-decoder.md) |
+| Package the app as an `.exe` that runs without Python | [Build a standalone executable](build-executable.md) |
 | Turn a C console menu into a workflow | [examples/led_device](../../examples/led_device/README.md) |
 | Port C code to Python and prove it behaves the same | [Porting guide](../PORTING_GUIDE.md) |
 | Look up every option in one place, or delete a feature's code | [TEMPLATE.md](../../TEMPLATE.md) |

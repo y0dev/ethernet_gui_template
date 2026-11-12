@@ -20,7 +20,8 @@ from PySide6.QtCore import QTimer
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QMessageBox
 
-ROOT = Path(__file__).resolve().parent
+# Packaged builds look for plugins/ next to the executable, not inside the bundle.
+ROOT = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:  # so plugins/ can be imported as "plugins.<name>"
     sys.path.insert(0, str(ROOT))
 
