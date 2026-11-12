@@ -71,7 +71,9 @@ the reply CRC.
 
    Then click **Start server**.
 3. **Database:** **Use this database**, or **Create new…** for a separate test
-   campaign.
+   campaign. **View contents…** opens a read-only browser of every table in
+   it (sessions, devices, results); keep it open and press Refresh to watch
+   rows arrive.
 4. Start three dummy devices in a terminal:
 
    ```bash
@@ -109,6 +111,9 @@ Some cases need code rather than a fixed operation:
 * **Frames that change per send,** such as a sequence number or timestamp.
   Build them in a page (`python tools/new_page.py <key> "<Title>" --template
   device_console`) with the same encoder.
+* **A workflow of your own,** with extra steps (for example a calibration
+  step before the operations) or fewer: `python tools/new_page.py
+  led_session "LED Session" --template device_workflow`, then edit `STEPS`.
 * **Values typed by the user,** such as "blink N times". Either add one
   operation per common value (like *Blink LED x10*) or add an input to a
   `device_console` page.

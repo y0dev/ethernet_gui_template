@@ -29,6 +29,8 @@ python tools/new_page.py status "Device Status" --template blank
 | `live_packets` | shows traffic as it arrives (filter in `accepts()`) |
 | `device_console` | sends bytes to a connection and logs the replies |
 | `db_table` | views and edits a table (`--table`, `--database`) |
+| `workflow` | guides the user through steps that unlock in order (replace the example steps) |
+| `device_workflow` | runs a device session of your own: server, devices, operations, results |
 
 The tool writes `plugins/status.py` and adds two entries to `project.json`:
 `"plugins.status"` in `plugins` and `"status"` in `pages`. Restart the app

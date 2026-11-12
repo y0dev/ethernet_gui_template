@@ -101,6 +101,8 @@ python tools/new_page.py --list-templates
 | `query_form` | One input per `:parameter` of a named query, a Run button and a result table. Set `QUERY` at the top of the file. |
 | `live_packets` | Live table of traffic on every connection, with pause and clear. Filter it in `accepts()`. |
 | `device_console` | Send HEX/ASCII to an open connection and log its replies. Change the display in `format_frame()`. |
+| `workflow` | Guided step-by-step page: a step bar, Back/Next, and steps that unlock in order. Each step is a `Step` subclass (`build()`, `is_done()`, `refresh()`); `STEPS` sets the order. Ships with three example steps to replace. |
+| `device_workflow` | A shorter, editable Session Workflow on the same services: Server → Devices → Run → Finish, with a read-only database browser. Results land in the same tables and reports as the built-in page. Add or remove steps in `STEPS`. |
 | `db_table` | View and edit a database table: search, paging, inline editing, Save/Revert. Used automatically with `--table`, see [View and edit a database table](#view-and-edit-a-database-table). |
 
 **Your own templates.** Put `<name>.py.tmpl` files in `page_templates/` at
