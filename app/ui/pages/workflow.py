@@ -365,8 +365,10 @@ class DatabaseStep(QWidget):
         layout.addWidget(_hint_label(f"{self.ctx.db.path}: pick a table to see its rows. "
                                      "Read-only; edit tables on the Database Explorer page."))
         editor = TableEditor(self.ctx.db, read_only=True, parent=dialog)
-        # The workflow stores everything in the workbench's own tables, so list them too.
+        # List every table in the file, whichever tables it has; the "Show workbench tables"
+        # switch only matters on the Database Explorer, so it is hidden here.
         editor.show_workbench.setChecked(True)
+        editor.show_workbench.hide()
         editor.chooser.setCurrentText("sessions")
         layout.addWidget(editor, 1)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)

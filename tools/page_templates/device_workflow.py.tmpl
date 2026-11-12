@@ -350,7 +350,8 @@ class FinishStep(Step):
         dialog.resize(1000, 600)
         layout = QVBoxLayout(dialog)
         editor = TableEditor(self.ctx.db, read_only=True, parent=dialog)
-        editor.show_workbench.setChecked(True)
+        editor.show_workbench.setChecked(True)     # list every table in the file...
+        editor.show_workbench.hide()               # ...without the workbench-tables switch
         editor.chooser.setCurrentText("operation_results")
         layout.addWidget(editor, 1)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
