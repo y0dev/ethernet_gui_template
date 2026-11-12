@@ -59,6 +59,7 @@ from ...core.services import WorkflowError
 from ..dialogs.editors import FramingEditor
 from ..styles import theme
 from ..widgets.common import PageHeader, StatusDot, configure_table, section_label, show_error
+from ..widgets.table_editor import TableEditor
 from ..widgets.table_models import Column, RecordTableModel, format_timestamp
 
 # Step titles in order; their index is the step number used by go_to(), step_done() and
@@ -266,9 +267,14 @@ class DatabaseStep(QWidget):
         open_button.clicked.connect(self.open_existing)
         new_button = QPushButton("Create new…")
         new_button.clicked.connect(self.create_new)
+        # Read-only browser of every table in the selected database (sessions, packets, results, …).
+        view_button = QPushButton("View contents…")
+        view_button.setToolTip("Browse the tables and rows stored in the selected database")
+        view_button.clicked.connect(self.view_contents)
+        self.contents_dialog: QDialog | None = None
         # When ticked, the chosen file becomes database_path in data/config.json.
         self.make_default = QCheckBox("Open this database automatically at startup")
-        for w in (use, open_button, new_button):
+        for w in (use, open_button, new_button, view_button):
             row.addWidget(w)
         row.addSpacing(12)
         row.addWidget(self.make_default)
@@ -283,6 +289,7 @@ class DatabaseStep(QWidget):
         layout.addWidget(self.recent, 1)
         layout.addWidget(_hint_label("Double-click a recent database to open it."))
         self.wf.database_changed.connect(lambda _p: self.refresh())
+        self.wf.database_changed.connect(lambda _p: self._close_contents())
         self.wf.session_changed.connect(lambda _s: self.refresh())
         self.refresh()
 
@@ -339,6 +346,40 @@ class DatabaseStep(QWidget):
             if not path.lower().endswith((".db", ".sqlite", ".sqlite3")):
                 path += ".db"
             self._open_database(path)
+
+    def view_contents(self) -> None:
+        """Open a read-only browser of the selected database's tables and rows.
+
+        The window stays open beside the workflow (use Refresh in it to see new
+        rows while a session records) and closes when the database is switched.
+        """
+        if self.contents_dialog is not None:
+            self.contents_dialog.raise_()
+            self.contents_dialog.activateWindow()
+            return
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f"Database contents: {self.ctx.db.path.name}")
+        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        dialog.resize(1000, 600)
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(_hint_label(f"{self.ctx.db.path}: pick a table to see its rows. "
+                                     "Read-only; edit tables on the Database Explorer page."))
+        editor = TableEditor(self.ctx.db, read_only=True, parent=dialog)
+        # The workflow stores everything in the workbench's own tables, so list them too.
+        editor.show_workbench.setChecked(True)
+        editor.chooser.setCurrentText("sessions")
+        layout.addWidget(editor, 1)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.rejected.connect(dialog.close)
+        layout.addWidget(buttons)
+        dialog.destroyed.connect(lambda _o=None: setattr(self, "contents_dialog", None))
+        self.contents_dialog = dialog
+        dialog.show()
+
+    def _close_contents(self) -> None:
+        """Close the contents browser, which would otherwise show the previous database."""
+        if self.contents_dialog is not None:
+            self.contents_dialog.close()
 
     def _open_database(self, path: str) -> None:
         """Switch the workflow to a database file, showing any error.
