@@ -121,6 +121,8 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     ctx = AppContext.create(config, cfg_file, app, sql_dirs=profile.sql_paths())
+    ctx.menu_hooks = list(profile.menu_hooks)
+    ctx.workflow_operations = profile.workflow_operations
     registry = PageRegistry()
     problems = registry.load_plugins(profile.plugins)
     for hook in registry.startup_hooks:

@@ -11,7 +11,10 @@ All logic lives in WorkflowService; this module only presents it.
 
 from __future__ import annotations
 
+import importlib
+import inspect
 import json
+import logging
 import time
 from pathlib import Path
 
@@ -61,6 +64,8 @@ from ..styles import theme
 from ..widgets.common import PageHeader, StatusDot, configure_table, section_label, show_error
 from ..widgets.table_editor import TableEditor
 from ..widgets.table_models import Column, RecordTableModel, format_timestamp
+
+log = logging.getLogger(__name__)
 
 # Step titles in order; their index is the step number used by go_to(), step_done() and
 # step_blocker().
@@ -588,7 +593,10 @@ class DevicesStep(QWidget):
         title = menu.addAction(f"{len(peers)} device(s) selected")
         title.setEnabled(False)
         ops_menu = menu.addMenu("Run operation")
-        ops = self.wf.list_operations()
+        step = self.page.operations_step
+        # Step 4 is either the fixed operations or the menu hooks; list whichever it shows.
+        hooks = getattr(step, "options", None)
+        ops = hooks if hooks is not None else self.wf.list_operations()
         if not ops:
             empty = ops_menu.addAction("(no operations defined, see step 4)")
             empty.setEnabled(False)
@@ -599,9 +607,12 @@ class DevicesStep(QWidget):
             if sub is None:
                 sub = ops_menu.addMenu(op.category)
                 categories[op.category] = sub
-            action = QAction(op.name, sub)
+            action = QAction(op.title if hooks is not None else op.name, sub)
             action.setToolTip(op.description)
-            action.triggered.connect(lambda _c=False, o=op: self.page.operations_step.run_operations(connected, [o]))
+            if hooks is not None:
+                action.triggered.connect(lambda _c=False, o=op: (step.set_targets(connected), step.run_option(o)))
+            else:
+                action.triggered.connect(lambda _c=False, o=op: step.run_operations(connected, [o]))
             sub.addAction(action)
         # Operations can run only on connected devices and only while a session records the results.
         ops_menu.setEnabled(bool(connected) and self.wf.session_id is not None)
@@ -1334,6 +1345,37 @@ class ReportStep(QWidget):
 # =============================================================================
 # Page
 # =============================================================================
+def operations_step_for(ctx: AppContext) -> QWidget:
+    """Build step 4 as chosen by ``ctx.workflow_operations``.
+
+    ``"operations"`` is the fixed-operations step above, ``"menu"`` the
+    Operations Menu page, and ``"module:Class"`` any page class, for example
+    one generated from a ``menu_*`` page template. A page that accepts
+    ``embedded`` gets ``embedded=True``. A page that cannot be loaded is
+    reported in the log and the fixed-operations step is used instead.
+
+    Args:
+        ctx: Application context.
+
+    Returns:
+        The step widget.
+    """
+    choice = ctx.workflow_operations
+    if choice == "operations":
+        return OperationsStep(ctx)
+    target = "app.ui.pages.operations_menu:OperationsMenuPage" if choice == "menu" else choice
+    module_name, _, class_name = target.partition(":")
+    try:
+        page_class = getattr(importlib.import_module(module_name), class_name)
+        if "embedded" in inspect.signature(page_class).parameters:
+            return page_class(ctx, embedded=True)
+        return page_class(ctx)
+    except Exception:
+        log.exception("workflow step 4 could not be loaded; using the operations step",
+                      extra={"context": {"workflow_operations": choice}})
+        return OperationsStep(ctx)
+
+
 # The page itself: a step bar at the top, the five step widgets in a stack (one visible at a time),
 # and Back / Next at the bottom. It also decides which steps are unlocked.
 class WorkflowPage(QWidget):
@@ -1382,7 +1424,8 @@ class WorkflowPage(QWidget):
         self.server_step = ServerStep(ctx)
         self.database_step = DatabaseStep(ctx)
         self.devices_step = DevicesStep(ctx, self)
-        self.operations_step = OperationsStep(ctx)
+        # Step 4: chosen by project.json -> workflow_operations (see docs/guides/menu-hooks.md).
+        self.operations_step = operations_step_for(ctx)
         self.report_step = ReportStep(ctx, self)
         for w in (self.server_step, self.database_step, self.devices_step, self.operations_step, self.report_step):
             self.stack.addWidget(w)

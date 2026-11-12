@@ -8,6 +8,8 @@ files to change, shows working code, and ends with what to check.
 | Rename the app, change its icon and colours, choose which pages show | [Branding and layout](branding-and-layout.md) |
 | Add a table and a page to view and edit it, or edit my own SQLite file | [Set up a database page](database-page.md) |
 | Build a page of my own (layout, services, widgets, renaming, removing) | [Build your own page](custom-page.md) |
+| Run Python functions on my devices from a numbered menu | [Menu hooks](menu-hooks.md) |
+| Choose another layout for that menu (console, buttons, form, sequence) | [Pick a layout](menu-templates.md) |
 | Put my device's commands in the Session Workflow menu | [Set up operations for your device](device-operations.md) |
 | See my frames as named fields in the Packet Monitor | [Decode your device's frames](protocol-decoder.md) |
 | Package the app as an `.exe` that runs without Python | [Build a standalone executable](build-executable.md) |

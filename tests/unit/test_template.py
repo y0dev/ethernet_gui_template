@@ -374,6 +374,11 @@ def _exercise_page(template: str, page) -> None:
         page.steps[1].run()
         page.go_to(2)
         assert page.stack.currentIndex() == 2 and "Runs completed: 1" in page.steps[2].summary.text()
+    elif template.startswith("menu_"):
+        # no hook modules and no server in this context: an empty menu that says what to do
+        assert page.options == [] and "Start the server" in page.status.text()
+        page.set_targets([])
+        assert page.ticked_peers() == []
     elif template == "device_workflow":
         import socket
 
@@ -399,7 +404,8 @@ def _exercise_page(template: str, page) -> None:
 
 
 @pytest.mark.parametrize("template", ["table", "blank", "query_form", "live_packets", "device_console", "db_table",
-                                      "workflow", "device_workflow"])
+                                      "workflow", "device_workflow", "menu_console", "menu_buttons", "menu_form",
+                                      "menu_sequence"])
 def test_every_builtin_page_template_works(qtbot, tmp_path, template):
     """Each built-in template generates a page that loads, opens and does its job.
 

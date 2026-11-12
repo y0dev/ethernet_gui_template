@@ -549,12 +549,14 @@ class WorkflowService(QObject):
         """
         return [op.to_dict() for op in self.operations.list()]
 
-    def run_operations(self, peers: list[str], operations: list[DeviceOperation]) -> int:
+    def run_operations(self, peers: list[str], operations: list[DeviceOperation],
+                       on_result: Callable[[dict[str, Any]], None] | None = None) -> int:
         """Queue operations, in order, on each selected device.
 
         Args:
             peers: Addresses of connected devices.
             operations: Operations to run on each device.
+            on_result: Called with each result row as it finishes.
 
         Returns:
             The number of jobs queued.
@@ -576,7 +578,7 @@ class WorkflowService(QObject):
             device = self.devices.get(peer)
             if device is None or not device.connected:
                 raise WorkflowError(f"{peer} is not connected")
-            self.runner.enqueue(self.server_id, peer, operations, self.session_id, device.label)
+            self.runner.enqueue(self.server_id, peer, operations, self.session_id, device.label, on_result)
             queued += len(operations)
         return queued
 

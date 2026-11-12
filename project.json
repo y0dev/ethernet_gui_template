@@ -6,9 +6,10 @@
   "_icon": "Window and taskbar icon (.svg, .png or .ico), relative to the project root. Empty = Qt default.",
   "icon": "resources/icons/app.svg",
 
-  "_pages": "Navigation order. Remove a key to hide that page. Built-ins: workflow, dashboard, devices, connections, packet_monitor, test_bench, porting, database, logs, settings. Plugin pages not listed here are appended at the end.",
+  "_pages": "Navigation order. Remove a key to hide that page. Built-ins: workflow, operations_menu, dashboard, devices, connections, packet_monitor, test_bench, porting, database, logs, settings. Plugin pages not listed here are appended at the end.",
   "pages": [
     "workflow",
+    "operations_menu",
     "dashboard",
     "devices",
     "connections",
@@ -24,6 +25,12 @@
 
   "_plugins": "Python modules with a register(registry) function (create one with tools/new_page.py).",
   "plugins": ["plugins.example_queries"],
+
+  "_menu_hooks": "Python modules whose @menu_option functions appear on the Operations Menu page (see plugins/example_menu.py).",
+  "menu_hooks": ["plugins.example_menu"],
+
+  "_workflow_operations": "Step 4 of the Session Workflow: 'operations' (fixed operations from command sets) or 'menu' (the Operations Menu's hooks).",
+  "workflow_operations": "operations",
 
   "_sql_dirs": "Folders whose *.sql files define named queries (loaded after the built-ins; same name overrides).",
   "sql_dirs": ["sql"],

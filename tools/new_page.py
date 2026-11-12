@@ -6,6 +6,7 @@
     python tools/new_page.py calibration "Calibration" --no-enable
     python tools/new_page.py calibration "Calibration" --table calibration
     python tools/new_page.py plant "Plant data" --table readings --database data/plant.db
+    python tools/new_page.py ops "Operations" --template menu_buttons --workflow
     python tools/new_page.py --list-templates
 
 Writes plugins/<key>.py from a page template and adds it to project.json ->
@@ -18,6 +19,10 @@ Templates are plain Python with these placeholders: $key (page key), $title
 (--database).  Write $$ for a literal dollar sign.  --table on its own picks
 the "db_table" template: a page to view and edit that table.  An optional first line "# template: <description>" is shown by
 --list-templates and left out of the generated page.
+
+--workflow puts the page in step 4 of the Session Workflow instead of a tab of
+its own: it sets project.json -> workflow_operations to "plugins.<key>:<Class>"
+(meant for the menu_* templates; set it back to "operations" to undo).
 
 Updating the page later: the tool only creates the starting file and never
 overwrites it.  Edit plugins/<key>.py directly and restart the application.
@@ -213,6 +218,22 @@ def enable_in_project(project_file: Path, key: str) -> str:
     return module
 
 
+def use_in_workflow(project_file: Path, key: str) -> str:
+    """Make the page step 4 of the Session Workflow in ``project.json``.
+
+    Args:
+        project_file: Path of ``project.json``; created if missing.
+        key: Page key.
+
+    Returns:
+        The ``workflow_operations`` value, e.g. ``"plugins.ops:OpsPage"``.
+    """
+    data = json.loads(project_file.read_text(encoding="utf-8")) if project_file.exists() else {}
+    data["workflow_operations"] = f"plugins.{key}:{class_name_for(key)}"
+    project_file.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    return data["workflow_operations"]
+
+
 def print_templates(root: Path) -> None:
     """Print every available template with its description and location.
 
@@ -247,6 +268,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="SQLite file for $database, relative to the project root (default: the app database)")
     parser.add_argument("--list-templates", action="store_true", help="show the available templates and exit")
     parser.add_argument("--no-enable", action="store_true", help="do not edit project.json")
+    parser.add_argument("--workflow", action="store_true",
+                        help="use the page as step 4 of the Session Workflow instead of adding a tab")
     parser.add_argument("--root", default=str(ROOT), help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     root = Path(args.root)
@@ -275,7 +298,10 @@ def main(argv: list[str] | None = None) -> int:
     (target.parent / "__init__.py").touch()
     target.write_text(source, encoding="utf-8")
     print(f"created {target.relative_to(root)} from template '{template_name}'")
-    if not args.no_enable:
+    if args.workflow:
+        value = use_in_workflow(root / "project.json", args.key)
+        print(f"project.json: workflow_operations = {value!r} (step 4 of the Session Workflow)")
+    elif not args.no_enable:
         module = enable_in_project(root / "project.json", args.key)
         print(f"enabled in project.json: plugins += {module}, pages += {args.key}")
     return 0

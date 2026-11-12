@@ -55,6 +55,7 @@ Step-by-step guides ([all guides](docs/guides/README.md)):
 | Rename the app, change its icon and colours, choose pages | [Branding and layout](docs/guides/branding-and-layout.md) |
 | Add a table and a page to view and edit it | [Set up a database page](docs/guides/database-page.md) |
 | Build a page of my own | [Build your own page](docs/guides/custom-page.md) |
+| Run Python functions on my devices from a numbered menu | [Menu hooks](docs/guides/menu-hooks.md) |
 | Put my device's commands in the workflow menu | [Set up operations for your device](docs/guides/device-operations.md) |
 | See my frames as named fields | [Decode your device's frames](docs/guides/protocol-decoder.md) |
 | Package it as an `.exe` that runs without Python | [Build a standalone executable](docs/guides/build-executable.md) |

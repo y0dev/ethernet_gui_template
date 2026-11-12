@@ -111,6 +111,10 @@ Some cases need code rather than a fixed operation:
 * **Frames that change per send,** such as a sequence number or timestamp.
   Build them in a page (`python tools/new_page.py <key> "<Title>" --template
   device_console`) with the same encoder.
+* **Logic between commands,** such as decoding the temperature, checking
+  it against a limit, or blink counts typed by the user: `menu_hooks.py`
+  is this C menu as Python hooks for the Operations Menu page (see
+  [Menu hooks](../../docs/guides/menu-hooks.md)).
 * **A workflow of your own,** with extra steps (for example a calibration
   step before the operations) or fewer: `python tools/new_page.py
   led_session "LED Session" --template device_workflow`, then edit `STEPS`.

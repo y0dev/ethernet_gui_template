@@ -148,11 +148,26 @@ def module_file(module: str) -> Path | None:
     return None
 
 
+def source_modules(profile: ProjectProfile) -> list[str]:
+    """List the modules shipped as source beside the executable.
+
+    Args:
+        profile: Project profile.
+
+    Returns:
+        The plugins, the Operations Menu hook modules and a page used as
+        workflow step 4 (``"module:Class"``).
+    """
+    step4 = profile.workflow_operations.partition(":")[0] if ":" in profile.workflow_operations else ""
+    return [*profile.plugins, *profile.menu_hooks, *([step4] if step4 else [])]
+
+
 def plugin_imports(profile: ProjectProfile) -> list[str]:
     """List the modules the profile's plugins import, so they get bundled.
 
-    Plugins stay as source files beside the executable, so PyInstaller never
-    sees them; their imports are found here and bundled explicitly.
+    Plugins and menu hooks stay as source files beside the executable, so
+    PyInstaller never sees them; their imports are found here and bundled
+    explicitly.
 
     Args:
         profile: Project profile listing the plugins.
@@ -160,9 +175,9 @@ def plugin_imports(profile: ProjectProfile) -> list[str]:
     Returns:
         Sorted absolute module names, excluding ``app`` and the plugins themselves.
     """
-    local = {name.split(".")[0] for name in profile.plugins}
+    local = {name.split(".")[0] for name in source_modules(profile)}
     found: set[str] = set()
-    for name in profile.plugins:
+    for name in source_modules(profile):
         path = module_file(name)
         if path is None:
             print(f"warning: plugin {name} not found under {ROOT}; it is not shipped")
@@ -246,7 +261,7 @@ def copy_project_files(profile: ProjectProfile, profile_file: Path, out: Path) -
     if profile_file.is_file():
         shutil.copy2(profile_file, out / "project.json")
     copy_dir(Path("resources"))
-    for name in profile.plugins:
+    for name in source_modules(profile):
         copy_dir(Path(name.split(".")[0]))
     for value in profile.sql_dirs:
         if not Path(value).expanduser().is_absolute():

@@ -31,6 +31,7 @@ python tools/new_page.py status "Device Status" --template blank
 | `db_table` | views and edits a table (`--table`, `--database`) |
 | `workflow` | guides the user through steps that unlock in order (replace the example steps) |
 | `device_workflow` | runs a device session of your own: server, devices, operations, results |
+| `menu_console`, `menu_buttons`, `menu_form`, `menu_sequence` | runs your menu hooks in another layout ([screenshots](menu-templates.md)); `--workflow` puts it in workflow step 4 |
 
 The tool writes `plugins/status.py` and adds two entries to `project.json`:
 `"plugins.status"` in `plugins` and `"status"` in `pages`. Restart the app

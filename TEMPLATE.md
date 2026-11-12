@@ -58,6 +58,7 @@ Built-in page keys:
 | Key | Page |
 |---|---|
 | `workflow` | Session Workflow (server → database → devices → operations → report) |
+| `operations_menu` | Operations Menu: numbered options that run your Python hooks (`menu_hooks`, see [the guide](docs/guides/menu-hooks.md)). `"workflow_operations": "menu"` also puts it in step 4 of the Session Workflow. |
 | `dashboard` | Dashboard |
 | `devices` | Device Manager |
 | `connections` | Network Connections |
@@ -103,6 +104,7 @@ python tools/new_page.py --list-templates
 | `device_console` | Send HEX/ASCII to an open connection and log its replies. Change the display in `format_frame()`. |
 | `workflow` | Guided step-by-step page: a step bar, Back/Next, and steps that unlock in order. Each step is a `Step` subclass (`build()`, `is_done()`, `refresh()`); `STEPS` sets the order. Ships with three example steps to replace. |
 | `device_workflow` | A shorter, editable Session Workflow on the same services: Server → Devices → Run → Finish, with a read-only database browser. Results land in the same tables and reports as the built-in page. Add or remove steps in `STEPS`. |
+| `menu_console` / `menu_buttons` / `menu_form` / `menu_sequence` | The menu hooks as a C-style console, a button panel, a form, or a test sequence with a results grid. Add `--workflow` to make the page step 4 of the Session Workflow. Screenshots: [Pick a layout](docs/guides/menu-templates.md). |
 | `db_table` | View and edit a database table: search, paging, inline editing, Save/Revert. Used automatically with `--table`, see [View and edit a database table](#view-and-edit-a-database-table). |
 
 **Your own templates.** Put `<name>.py.tmpl` files in `page_templates/` at
